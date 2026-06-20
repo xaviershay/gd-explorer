@@ -156,13 +156,19 @@ decodeRecord _hdr strs loc raw rh = do
 -- Top-level load
 --------------------------------------------------------------------------------
 
--- | Parse an @.arz@ file, decoding only @records/items/@ bodies.
+-- record-name prefixes whose bodies we fully decode (items + the skill records
+-- that items' skill bonuses reference). Everything else is skipped.
+wantedPrefixes :: [Text]
+wantedPrefixes = ["records/items/", "records/skills/"]
+
+-- | Parse an @.arz@ file, decoding only the record bodies we need
+-- (see 'wantedPrefixes').
 loadArz :: LocalizationTable -> BS.ByteString -> Either String RecordDb
 loadArz loc raw = do
   hdr <- runGet readHeader raw
   strs <- runGet (readStringTable (hStringTableStart hdr)) raw
   rhs <- runGet (readRecordHeaders hdr strs) raw
-  let wanted = filter (T.isPrefixOf "records/items/" . rhName) rhs
+  let wanted = filter (\rh -> any (`T.isPrefixOf` rhName rh) wantedPrefixes) rhs
   pairs <- mapM (\rh -> (,) (rhName rh) <$> decodeRecord hdr strs loc raw rh) wanted
   pure (HM.fromList pairs)
 

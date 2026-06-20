@@ -5,6 +5,7 @@
 module GrimDawn.Gdc
   ( Item (..)
   , emptyItemName
+  , Skill (..)
   , Character (..)
   , loadCharacter
   , loadCharacterFile
@@ -44,6 +45,23 @@ data Item = Item
 emptyItemName :: Item -> Bool
 emptyItemName = T.null . itemBaseName
 
+-- | A learned skill (or devotion star) from block 8. Mirrors gd-edit's @Skill@
+-- struct. Class skills have @skName@ under @records/skills/<mastery>/@; devotion
+-- stars have it under @records/skills/devotion/@.
+data Skill = Skill
+  { skName :: !Text -- skill record path
+  , skLevel :: !Int32 -- invested level
+  , skEnabled :: !Bool
+  , skDevotionLevel :: !Int32
+  , skDevotionExperience :: !Int32
+  , skSublevel :: !Int32
+  , skActive :: !Bool
+  , skTransition :: !Bool
+  , skAutoCastSkill :: !Text
+  , skAutoCastController :: !Text
+  }
+  deriving (Show, Eq)
+
 -- | A character loaded from a @player.gdc@. Item lists are flattened across
 -- their containers (sacks / stash tabs) with empty slots removed.
 data Character = Character
@@ -54,6 +72,7 @@ data Character = Character
   , charEquipped :: ![Item]
   , charInventory :: ![Item]
   , charPersonalStash :: ![Item]
+  , charSkills :: ![Skill]
   }
   deriving (Show, Eq)
 
@@ -96,6 +115,22 @@ decEquipmentItem = decItem <* decBool
 -- inventory / stash item = item + X,Y int32
 decGridItem :: Dec Item
 decGridItem = decItem <* decInt <* decInt
+
+-- block-8 Skill struct (gd-edit @Skill@): name + level + enabled + devotion
+-- level/experience + sublevel + active/transition flags + autocast names.
+decSkill :: Dec Skill
+decSkill =
+  Skill
+    <$> decAscii -- name (record path)
+    <*> decInt -- level
+    <*> decBool -- enabled
+    <*> decInt -- devotionLevel
+    <*> decInt -- devotionExperience
+    <*> decInt -- sublevel
+    <*> decBool -- active
+    <*> decBool -- transition
+    <*> decAscii -- autoCastSkill
+    <*> decAscii -- autoCastController
 
 --------------------------------------------------------------------------------
 -- Block framing
@@ -170,6 +205,18 @@ readStash = do
   decArray decGridItem
 
 --------------------------------------------------------------------------------
+-- Block 8 (skills + devotions)
+--------------------------------------------------------------------------------
+
+-- Skills block: version, then the skill array. The remaining fields
+-- (masteries-allowed, reclamation points, item skills) are skipped by the
+-- caller, which advances to the framed block end.
+readBlock8 :: Dec [Skill]
+readBlock8 = do
+  _version <- decInt
+  decArray decSkill
+
+--------------------------------------------------------------------------------
 -- Top-level file
 --------------------------------------------------------------------------------
 
@@ -183,32 +230,38 @@ readHeader = do
   _expansion <- decByte
   pure (name, male, className, level, hardcore)
 
--- top-level block loop, accumulating block 3 + block 4 results
-readBlocks :: ([Item], [Item]) -> [Item] -> Dec (([Item], [Item]), [Item])
-readBlocks acc3 acc4 = do
+-- top-level block loop, accumulating block 3 (items) + 4 (stash) + 8 (skills)
+readBlocks :: ([Item], [Item]) -> [Item] -> [Skill] -> Dec (([Item], [Item]), [Item], [Skill])
+readBlocks acc3 acc4 acc8 = do
   done <- (<= 0) <$> decRemaining
   if done
-    then pure (acc3, acc4)
+    then pure (acc3, acc4, acc8)
     else do
       blockId <- decInt
       len <- fromIntegral <$> decU32NoAdvance
       start <- decPos
-      (acc3', acc4') <- case blockId of
+      (acc3', acc4', acc8') <- case blockId of
         3 -> do
           r <- readBlock3
-          pure (r, acc4)
+          pure (r, acc4, acc8)
         4 -> do
           r <- readBlock4
-          pure (acc3, r)
+          pure (acc3, r, acc8)
+        8 -> do
+          r <- readBlock8
+          -- skip any trailing fields (masteries-allowed, item skills, ...)
+          cur <- decPos
+          advanceOver (len - (cur - start))
+          pure (acc3, acc4, r)
         _ -> do
           advanceOver len
-          pure (acc3, acc4)
+          pure (acc3, acc4, acc8)
       end <- decPos
       unless (end - start == len) $
         fail ("block " ++ show blockId ++ " length mismatch: expected "
                 ++ show len ++ " got " ++ show (end - start))
       verifyChecksum
-      readBlocks acc3' acc4'
+      readBlocks acc3' acc4' acc8'
 
 -- | Parse a character from the raw bytes of a @player.gdc@ file.
 loadCharacter :: BS.ByteString -> Either String Character
@@ -227,7 +280,7 @@ loadCharacter raw = do
       unless (dataVersion `elem` [6, 7, 8]) $
         fail ("unsupported gdc data-version " ++ show dataVersion)
       _mystery <- decStaticBytes 16
-      ((equip, inv), pstash) <- readBlocks ([], []) []
+      ((equip, inv), pstash, skills) <- readBlocks ([], []) [] []
       let keep = filter (not . emptyItemName)
       pure Character
         { charName = name
@@ -237,6 +290,7 @@ loadCharacter raw = do
         , charEquipped = keep equip
         , charInventory = keep inv
         , charPersonalStash = keep pstash
+        , charSkills = skills
         }
 
 -- | Load and parse a character file from disk.

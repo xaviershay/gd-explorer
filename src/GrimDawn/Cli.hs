@@ -1,7 +1,7 @@
 -- | Command-line interface. Two one-shot subcommands:
 --
 -- > gd-explorer sets [--all] [--data-dir DIR]
--- > gd-explorer items [--type T] [--resist R]... [--damage D]... [--set]
+-- > gd-explorer items [--type T] [--resist R]... [--damage D]... [--skill S]... [--set]
 -- >                   [--char NAME] [--min-level N] [--max-level N] [--data-dir DIR]
 module GrimDawn.Cli
   ( runCli
@@ -15,14 +15,17 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Options.Applicative
 import System.Exit (exitFailure)
-import System.IO (hPutStrLn, stderr)
+import System.IO (hIsTerminalDevice, hPutStrLn, stderr, stdout)
 
-import GrimDawn.Aggregate (loadOwnedItems)
+import Data.List (sortOn)
+import GrimDawn.Aggregate (loadCharacters, loadOwnedItems)
 import GrimDawn.Db (loadGameDb)
+import GrimDawn.Gdc (Character (..))
+import GrimDawn.Report.Character (renderCharacter)
 import GrimDawn.Report.Items
   ( ItemFilter (..)
   , itemRows
-  , renderItemsTable
+  , renderItems
   )
 import GrimDawn.Report.Sets (renderSetReport, setReport)
 
@@ -33,6 +36,7 @@ defaultDataDir = "data/gd-data"
 data Command
   = CmdSets FilePath Bool
   | CmdItems FilePath ItemFilter
+  | CmdCharacter FilePath (Maybe Text)
   deriving (Show, Eq)
 
 dataDirOpt :: Parser FilePath
@@ -57,6 +61,12 @@ itemsParser =
     <$> dataDirOpt
     <*> filterParser
 
+characterParser :: Parser Command
+characterParser =
+  CmdCharacter
+    <$> dataDirOpt
+    <*> optional (T.pack <$> argument str (metavar "NAME" <> help "Character name (omit to list characters)"))
+
 filterParser :: Parser ItemFilter
 filterParser =
   ItemFilter
@@ -66,6 +76,8 @@ filterParser =
       (txtOption (long "resist" <> metavar "RES" <> help "Require a resistance (repeatable)"))
     <*> many
       (txtOption (long "damage" <> metavar "DMG" <> help "Require a damage type (repeatable)"))
+    <*> many
+      (txtOption (long "skill" <> metavar "SKILL" <> help "Require a +skill bonus matching SKILL substring; use \"\" for any (repeatable)"))
     <*> switch (long "set" <> help "Only set items")
     <*> optional
       (txtOption (long "char" <> metavar "NAME" <> help "Restrict to a character"))
@@ -80,6 +92,7 @@ commandParser =
   hsubparser
     ( command "sets" (info setsParser (progDesc "Set-completion report"))
         <> command "items" (info itemsParser (progDesc "Filterable item inventory"))
+        <> command "character" (info characterParser (progDesc "A character's gear, skills, and devotions"))
     )
 
 opts :: ParserInfo Command
@@ -104,8 +117,34 @@ run = \case
     db <- loadGameDb dir >>= orDie
     owned <- loadOwnedItems dir >>= orDie
     let rows = itemRows db flt owned
-    TIO.putStr (renderItemsTable rows)
+    useColor <- hIsTerminalDevice stdout
+    TIO.putStr (renderItems useColor rows)
     unless (null rows) $ TIO.putStrLn (T.pack (show (length rows)) <> " items")
+  CmdCharacter dir mname -> do
+    chars <- loadCharacters dir >>= orDie
+    case mname of
+      Nothing -> do
+        let names = sortOn T.toLower (map charName chars)
+        TIO.putStr (T.unlines names)
+      Just name ->
+        case findChar name chars of
+          Nothing -> do
+            hPutStrLn stderr ("error: no character named " ++ T.unpack name)
+            unless (null chars) $
+              hPutStrLn stderr ("known: " ++ T.unpack (T.intercalate ", " (map charName chars)))
+            exitFailure
+          Just c -> do
+            db <- loadGameDb dir >>= orDie
+            useColor <- hIsTerminalDevice stdout
+            TIO.putStr (renderCharacter useColor db c)
+
+-- | Match a character by name, case-insensitively.
+findChar :: Text -> [Character] -> Maybe Character
+findChar name = go
+  where
+    target = T.toLower name
+    go [] = Nothing
+    go (c : cs) = if T.toLower (charName c) == target then Just c else go cs
 
 orDie :: Either String a -> IO a
 orDie (Right x) = pure x

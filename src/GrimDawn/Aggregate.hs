@@ -5,9 +5,11 @@ module GrimDawn.Aggregate
   , OwnedItem (..)
   , locationLabel
   , loadOwnedItems
+  , loadCharacters
   ) where
 
 import Control.Monad (forM)
+import Data.Either (partitionEithers)
 import Data.Text (Text)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath ((</>))
@@ -78,6 +80,24 @@ loadChars mainDir = do
        in [OwnedItem i (Equipped nm) | i <- charEquipped c]
             ++ [OwnedItem i (Inventory nm) | i <- charInventory c]
             ++ [OwnedItem i (PersonalStash nm) | i <- charPersonalStash c]
+
+-- | Load every character under @save/main/*/player.gdc@ within @dataDir@.
+-- Returns a hard parse error if any present file fails to decode.
+loadCharacters :: FilePath -> IO (Either String [Character])
+loadCharacters dataDir = do
+  let mainDir = dataDir </> "save" </> "main"
+  exists <- doesDirectoryExist mainDir
+  if not exists
+    then pure (Right [])
+    else do
+      entries <- listDirectory mainDir
+      results <- forM entries $ \entry -> do
+        let gdc = mainDir </> entry </> "player.gdc"
+        present <- doesFileExist gdc
+        if not present then pure (Right Nothing) else fmap (fmap Just) (loadCharacterFile gdc)
+      pure $ case partitionEithers results of
+        (e : _, _) -> Left e
+        ([], cs) -> Right [c | Just c <- cs]
 
 loadShared :: FilePath -> IO (Either String [OwnedItem])
 loadShared transfer = do

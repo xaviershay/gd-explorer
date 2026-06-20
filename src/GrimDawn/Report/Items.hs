@@ -1,16 +1,18 @@
 -- | Filterable item inventory report: list owned items (across all characters
 -- and the shared stash) filtered by type, resistance, damage, set membership,
--- character, and level, rendered as a table.
+-- character, and level. Each item is rendered as a short block showing its
+-- rarity, slot, level, location, resistances, damage bonuses, and skill bonuses.
 module GrimDawn.Report.Items
   ( ItemFilter (..)
   , emptyFilter
   , ItemRow (..)
   , itemRows
   , matchesFilter
-  , renderItemsTable
+  , renderItems
   ) where
 
 import Data.List (sortOn)
+import Data.Maybe (catMaybes)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -18,12 +20,14 @@ import GrimDawn.Aggregate (Location, OwnedItem (..), locationLabel)
 import GrimDawn.Db (GameDb)
 import GrimDawn.Gdc (itemStackCount)
 import GrimDawn.Item (ItemAttrs (..), itemAttrs)
+import GrimDawn.Report.Color (applyColor, rarityColor, typeColor)
 
 -- | A conjunction of filter criteria; 'emptyFilter' matches everything.
 data ItemFilter = ItemFilter
   { ifType :: !(Maybe Text) -- item type / slot (e.g. "helm", "ring", "sword")
   , ifResists :: ![Text] -- require ALL of these resistance types
   , ifDamage :: ![Text] -- require ALL of these damage types
+  , ifSkills :: ![Text] -- require ALL of these as substrings of a skill bonus
   , ifSetOnly :: !Bool -- only set items
   , ifChar :: !(Maybe Text) -- restrict to a character (substring of location)
   , ifMinLevel :: !(Maybe Int)
@@ -32,15 +36,17 @@ data ItemFilter = ItemFilter
   deriving (Show, Eq)
 
 emptyFilter :: ItemFilter
-emptyFilter = ItemFilter Nothing [] [] False Nothing Nothing Nothing
+emptyFilter = ItemFilter Nothing [] [] [] False Nothing Nothing Nothing
 
--- | One rendered row of the report.
+-- | One item in the report.
 data ItemRow = ItemRow
   { irName :: !Text
+  , irRarity :: !(Maybe Text)
   , irType :: !Text
   , irLevel :: !(Maybe Int)
   , irResists :: ![Text]
-  , irDamage :: ![Text]
+  , irDamage :: ![Text] -- rendered damage bonuses (+/%)
+  , irSkills :: ![Text] -- rendered skill bonuses
   , irLocation :: !Text
   , irCount :: !Int
   }
@@ -62,7 +68,7 @@ typeSynonym q = case T.toLower q of
 -- | Does an item (with its attributes + location) satisfy the filter?
 matchesFilter :: ItemFilter -> ItemAttrs -> Location -> Bool
 matchesFilter ItemFilter {..} a loc =
-  typeOk && resistOk && damageOk && setOk && charOk && levelOk
+  typeOk && resistOk && damageOk && skillOk && setOk && charOk && levelOk
   where
     lvl = maybe 0 id (iaLevelRequirement a)
     typeOk = case ifType of
@@ -74,6 +80,10 @@ matchesFilter ItemFilter {..} a loc =
          in qn `T.isInfixOf` ty || T.toLower q `T.isInfixOf` cls
     resistOk = all (`Set.member` iaResists a) (map T.toLower ifResists)
     damageOk = all (`Set.member` iaDamage a) (map T.toLower ifDamage)
+    -- a skill query matches if it is a substring of any rendered skill bonus;
+    -- an empty query ("") matches any item that grants at least one skill bonus.
+    skillOk = all skillMatch (map T.toLower ifSkills)
+    skillMatch q = any (\s -> q `T.isInfixOf` T.toLower s) (iaSkillBonuses a)
     setOk = not ifSetOnly || iaIsSet a
     charOk = case ifChar of
       Nothing -> True
@@ -94,42 +104,53 @@ itemRows db flt owned =
     toRow oi a =
       ItemRow
         { irName = iaDisplayName a
+        , irRarity = iaClassification a
         , irType = maybe "" id (iaType a)
         , irLevel = iaLevelRequirement a
         , irResists = Set.toList (iaResists a)
-        , irDamage = Set.toList (iaDamage a)
+        , irDamage = iaDamageBonuses a
+        , irSkills = iaSkillBonuses a
         , irLocation = locationLabel (oiLocation oi)
         , irCount = max 1 (fromIntegral (itemStackCount (oiItem oi)))
         }
 
--- | Render rows as a fixed-width text table.
-renderItemsTable :: [ItemRow] -> Text
-renderItemsTable rows =
-  T.unlines (headerLine : sepLine : map rowLine rows)
+-- | Render the rows as a per-item block listing, e.g.
+--
+-- > Whisperer of Secrets  [Legendary]  head  lvl 65  — Odie (equipped)  x1
+-- >     resists: aether
+-- >     damage:  32% Pierce
+-- >     skills:  +3 Laceration, +2 Ring of Steel, Grants Ring of Steel
+--
+-- When @useColor@ is set, the @[rarity]@ tag is wrapped in its in-game colour.
+renderItems :: Bool -> [ItemRow] -> Text
+renderItems useColor = T.unlines . concatMap renderOne
   where
-    cols =
-      [ ("Name", map irName rows)
-      , ("Type", map irType rows)
-      , ("Lvl", map (maybe "" (T.pack . show) . irLevel) rows)
-      , ("Resists", map (T.intercalate "," . irResists) rows)
-      , ("Damage", map (T.intercalate "," . irDamage) rows)
-      , ("Location", map irLocation rows)
-      , ("Cnt", map (T.pack . show . irCount) rows)
-      ]
-    widths = [maximum (T.length h : map T.length vs) | (h, vs) <- cols]
-    pad w t = T.justifyLeft w ' ' t
-    headerLine = T.intercalate "  " (zipWith pad widths (map fst cols))
-    sepLine = T.intercalate "  " (map (`T.replicate` "-") widths)
-    rowLine r =
-      T.intercalate "  " $
-        zipWith
-          pad
-          widths
-          [ irName r
-          , irType r
-          , maybe "" (T.pack . show) (irLevel r)
-          , T.intercalate "," (irResists r)
-          , T.intercalate "," (irDamage r)
-          , irLocation r
-          , T.pack (show (irCount r))
+    renderOne r = headerLine r : detailLines r
+    headerLine r =
+      T.unwords $
+        catMaybes
+          [ Just (irName r)
+          , rarityTag <$> irRarity r
+          , nonEmpty (irType r)
+          , (\n -> "lvl " <> T.pack (show n)) <$> irLevel r
+          , Just ("— " <> irLocation r)
+          , Just ("x" <> T.pack (show (irCount r)))
           ]
+    rarityTag x =
+      let tag = "[" <> x <> "]"
+       in applyColor useColor (rarityColor x) tag
+    detailLines r =
+      catMaybes
+        [ field "resists" (T.intercalate ", " (map colorResist (irResists r)))
+        , field "damage " (T.intercalate ", " (map colorDamage (irDamage r)))
+        , field "skills " (T.intercalate ", " (irSkills r))
+        ]
+    -- a resistance is named by its type; a damage bonus is coloured by the
+    -- damage type in its trailing word (e.g. "Fire" in "+12-18 Fire").
+    colorResist t = applyColor useColor (typeColor t) t
+    colorDamage s = applyColor useColor (typeColor (lastWord s)) s
+    lastWord s = case T.words s of [] -> s; ws -> last ws
+    field label v
+      | T.null v = Nothing
+      | otherwise = Just ("    " <> label <> ": " <> v)
+    nonEmpty t = if T.null t then Nothing else Just t

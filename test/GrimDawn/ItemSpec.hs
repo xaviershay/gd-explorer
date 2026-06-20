@@ -60,9 +60,13 @@ spec = do
           (it_ : _) -> do
             let a = itemAttrs it_ db
             iaType a `shouldBe` Just "head"
-            iaClassification a `shouldBe` Just "Legendary"
+            iaClassification a `shouldBe` Just "Legendary" -- rarity
             iaLevelRequirement a `shouldBe` Just 65
             Set.member "aether" (iaResists a) `shouldBe` True
+            -- damage bonus: the helm has offensivePierceModifier 32
+            ("32% Pierce" `elem` iaDamageBonuses a) `shouldBe` True
+            -- skill bonuses: it augments two skills and grants one
+            null (iaSkillBonuses a) `shouldBe` False
           [] -> expectationFailure "expected to find 'Whisperer of Secrets'"
 
     it "detects at least one owned set item with a set record" $

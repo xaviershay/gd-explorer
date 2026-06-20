@@ -35,6 +35,8 @@ library
       GrimDawn.Gdc
       GrimDawn.Item
       GrimDawn.Lz4
+      GrimDawn.Report.Character
+      GrimDawn.Report.Color
       GrimDawn.Report.Items
       GrimDawn.Report.Sets
       GrimDawn.Stash
@@ -104,6 +106,7 @@ test-suite gd-explorer-test
       GrimDawn.GdcSpec
       GrimDawn.ItemSpec
       GrimDawn.Lz4Spec
+      GrimDawn.Report.CharacterSpec
       GrimDawn.Report.ItemsSpec
       GrimDawn.Report.SetsSpec
       GrimDawn.StashSpec

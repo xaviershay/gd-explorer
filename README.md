@@ -81,9 +81,17 @@ gd-explorer sets --data-dir /path/to/data
 
 ### `items` — filterable inventory
 
-Each filter narrows the results (they combine as AND); `--resist` and `--damage`
-may be repeated. Output is a table of name, type, level, resists, damage,
-location, and count.
+Each filter narrows the results (they combine as AND); `--resist`, `--damage`,
+and `--skill` may be repeated. Each matching item is printed as a short block: a header line
+with name, **rarity**, slot, level requirement, location, and count, followed by
+indented detail lines for resistances, **damage bonuses** (`+` flat and `%`
+modifiers), and **skill bonuses** (only the lines that apply are shown).
+
+When writing to a terminal, the rarity tag and the resistance / damage types are
+coloured to match Grim Dawn's in-game colours (rarity: Magical yellow, Rare
+green, Epic blue, Legendary purple; damage: Fire orange, Cold light blue,
+Lightning yellow, Poison green, Chaos dark red, etc.); the colour is omitted when
+output is piped or redirected.
 
 ```sh
 # fire-resistant helms anywhere
@@ -94,12 +102,18 @@ gd-explorer items --type ring --resist chaos
 ```
 
 ```
-Name                                  Type  Lvl  Resists                     Damage  Location           Cnt
-------------------------------------  ----  ---  --------------------------  ------  -----------------  ---
-Baldir's Mask                         head  65   chaos,cold,fire,lightning           shared stash       1
-Bloodreaper's Cowl                    head  20   cold,fire,lightning                 shared stash       1
-Celestial Woven Coif of the Mountain  head       chaos,cold,fire,lightning           Beats (inventory)  1
+Baldir's Mask [Epic] head lvl 65 — shared stash x1
+    resists: chaos, cold, fire, lightning
+    damage : 44% Physical
+    skills : +2 Judgment, +2 Blade Arc
+Champion of the Light [Epic] axe2h lvl 72 — Adam (stash) x1
+    damage : +260-300 Lightning, 120% Lightning
+    skills : +4 Oak Skin, +4 Counter Strike
 ```
+
+Damage and skill bonuses are aggregated from the item's base and affix records.
+Per the record-level approach, ranges shown reflect the database values, not the
+exact per-item roll.
 
 More examples:
 
@@ -115,6 +129,15 @@ gd-explorer items --type sword --damage lightning --char Adam
 
 # items usable below level 25
 gd-explorer items --max-level 25
+
+# anything granting +1 to all skills
+gd-explorer items --skill "all skills"
+
+# items that grant the Ring of Steel skill
+gd-explorer items --skill "ring of steel"
+
+# any item with a +skill bonus at all
+gd-explorer items --skill ""
 ```
 
 #### `items` options
@@ -124,6 +147,7 @@ gd-explorer items --max-level 25
 | `--type TYPE` | Item slot/type, e.g. `helm`, `ring`, `amulet`, `sword`, `chest` (common synonyms like `helm`→head are understood) |
 | `--resist RES` | Require a resistance: `fire`, `cold`, `lightning`, `poison`, `aether`, `chaos`, `vitality`, `pierce`, `bleed` (repeatable) |
 | `--damage DMG` | Require an offensive damage type, same vocabulary plus `physical`/`elemental` (repeatable) |
+| `--skill SKILL` | Require a `+`skill bonus whose text contains `SKILL` (case-insensitive substring, e.g. `"all skills"`, `"ring of steel"`); use `""` to match any item with a skill bonus (repeatable) |
 | `--set` | Only set items |
 | `--char NAME` | Restrict to a character (matched against the location label) |
 | `--min-level N` / `--max-level N` | Bound the item's level requirement |

@@ -12,6 +12,7 @@ module GrimDawn.Item
   , isSetItem
   , setRecordName
   , itemAttrs
+  , skillDisplayName
     -- * Attribute vocabularies
   , resistTypes
   , damageTypes
@@ -24,7 +25,7 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import GrimDawn.Arz (Record, lookupField, valueInt, valueText)
+import GrimDawn.Arz (Record, Value (..), lookupField, valueInt, valueText)
 import GrimDawn.Db (GameDb, lookupRecord)
 import GrimDawn.Gdc (Item (..))
 
@@ -37,6 +38,8 @@ data ItemAttrs = ItemAttrs
   , iaLevelRequirement :: !(Maybe Int)
   , iaResists :: !(Set Text) -- resistance types present (fire, cold, ...)
   , iaDamage :: !(Set Text) -- offensive damage types present
+  , iaDamageBonuses :: ![Text] -- rendered damage bonuses, e.g. "+12-18 Fire", "32% Pierce"
+  , iaSkillBonuses :: ![Text] -- rendered skill bonuses, e.g. "+1 to all Skills", "Grants Ring of Steel"
   , iaIsSet :: !Bool
   , iaSetRecord :: !(Maybe Text)
   }
@@ -182,6 +185,118 @@ damagePresent related stems =
     , prefix <- ["offensive", "offensiveBase"]
     ]
 
+--------------------------------------------------------------------------------
+-- Damage bonuses (flat + / percent %)
+--------------------------------------------------------------------------------
+
+-- field stem -> display name
+damageDisplayMap :: [(Text, Text)]
+damageDisplayMap =
+  [ ("Physical", "Physical")
+  , ("Fire", "Fire")
+  , ("Cold", "Cold")
+  , ("Lightning", "Lightning")
+  , ("Poison", "Poison")
+  , ("Aether", "Aether")
+  , ("Chaos", "Chaos")
+  , ("Life", "Vitality")
+  , ("Pierce", "Pierce")
+  , ("Bleeding", "Bleed")
+  ]
+
+-- numeric (scalar) value of a field
+fieldNum :: Text -> Record -> Maybe Double
+fieldNum f r = case lookupField f r of
+  Just (VInt i) -> Just (fromIntegral i)
+  Just (VFloat x) -> Just (realToFrac x)
+  _ -> Nothing
+
+-- sum a scalar field across all related records
+sumField :: [(Text, Record)] -> Text -> Double
+sumField related f = sum [v | (_, r) <- related, Just v <- [fieldNum f r]]
+
+-- drop a trailing ".0"
+showNum :: Double -> Text
+showNum x =
+  let r = round x :: Integer
+   in if fromIntegral r == x
+        then T.pack (show r)
+        else T.pack (show x)
+
+-- | Rendered damage bonuses across the item's records, flat (+) then percent (%).
+damageBonuses :: [(Text, Record)] -> [Text]
+damageBonuses related =
+  concatMap flat damageDisplayMap ++ concatMap percent allPercentStems
+  where
+    flat (stem, disp) =
+      let lo = sumField related ("offensive" <> stem <> "Min")
+            + sumField related ("offensiveBase" <> stem <> "Min")
+          hi = sumField related ("offensive" <> stem <> "Max")
+            + sumField related ("offensiveBase" <> stem <> "Max")
+       in if hi <= 0
+            then []
+            else
+              [ "+"
+                  <> ( if lo > 0 && lo /= hi
+                         then showNum lo <> "-" <> showNum hi
+                         else showNum hi
+                     )
+                  <> " "
+                  <> disp
+              ]
+    percent (stem, disp) =
+      let p = sumField related ("offensive" <> stem <> "Modifier")
+       in [showNum p <> "% " <> disp | p > 0]
+    -- percent includes Elemental in addition to the per-type stems
+    allPercentStems = damageDisplayMap ++ [("Elemental", "Elemental")]
+
+--------------------------------------------------------------------------------
+-- Skill bonuses
+--------------------------------------------------------------------------------
+
+-- resolve a skill record name to a display name (follows buff/pet redirects).
+skillDisplayName :: GameDb -> Text -> Text
+skillDisplayName db = go (4 :: Int)
+  where
+    go 0 path = leaf path
+    go n path = case lookupRecord path db of
+      Nothing -> leaf path
+      Just r ->
+        case textField "skillDisplayName" r of
+          Just nm | not (T.null nm) -> nm
+          _ ->
+            case textField "buffSkillName" r `orElse` textField "petSkillName" r of
+              Just redirect -> go (n - 1) redirect
+              Nothing -> leaf path
+    leaf = last . T.splitOn "/"
+
+-- skill bonuses contributed by a single record
+recordSkillBonuses :: GameDb -> Record -> [Text]
+recordSkillBonuses db r =
+  allSkills ++ augSkills ++ augMasteries ++ granted
+  where
+    numLevel f = showNum <$> fieldNum f r
+    allSkills =
+      ["+" <> lvl <> " to all Skills" | Just lvl <- [numLevel "augmentAllLevel"]]
+    augSkills =
+      [ "+" <> lvl <> " " <> skillDisplayName db nm
+      | i <- idxs
+      , Just nm <- [textField ("augmentSkillName" <> i) r]
+      , Just lvl <- [numLevel ("augmentSkillLevel" <> i)]
+      ]
+    augMasteries =
+      [ "+" <> lvl <> " to " <> skillDisplayName db nm
+      | i <- idxs
+      , Just nm <- [textField ("augmentMasteryName" <> i) r]
+      , Just lvl <- [numLevel ("augmentMasteryLevel" <> i)]
+      ]
+    granted =
+      ["Grants " <> skillDisplayName db nm | Just nm <- [textField "itemSkillName" r]]
+    idxs = map (T.pack . show) [1 .. 6 :: Int]
+
+skillBonuses :: GameDb -> [(Text, Record)] -> [Text]
+skillBonuses db related = concatMap (recordSkillBonuses db . snd) related
+
 -- | Derive every filterable attribute for an owned item.
 itemAttrs :: Item -> GameDb -> ItemAttrs
 itemAttrs it db =
@@ -198,6 +313,8 @@ itemAttrs it db =
     , iaDamage =
         Set.fromList
           [ ty | (ty, stems) <- damageFieldMap, damagePresent related stems ]
+    , iaDamageBonuses = damageBonuses related
+    , iaSkillBonuses = skillBonuses db related
     , iaIsSet = any (HM.member "itemSetName" . snd) related
     , iaSetRecord = setRecordName it db
     }

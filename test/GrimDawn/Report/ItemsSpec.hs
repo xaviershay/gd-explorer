@@ -19,6 +19,8 @@ helmAttrs =
     , iaLevelRequirement = Just 65
     , iaResists = Set.fromList ["fire", "cold"]
     , iaDamage = Set.empty
+    , iaDamageBonuses = []
+    , iaSkillBonuses = ["+1 to all Skills", "Grants Ring of Steel"]
     , iaIsSet = False
     , iaSetRecord = Nothing
     }
@@ -47,6 +49,17 @@ spec = do
       matchesFilter emptyFilter {ifChar = Just "beats"} helmAttrs loc `shouldBe` False
     it "filters set-only" $
       matchesFilter emptyFilter {ifSetOnly = True} helmAttrs loc `shouldBe` False
+    it "filters by skill bonus substring (case-insensitive)" $ do
+      matchesFilter emptyFilter {ifSkills = ["ring of steel"]} helmAttrs loc `shouldBe` True
+      matchesFilter emptyFilter {ifSkills = ["all skills"]} helmAttrs loc `shouldBe` True
+      matchesFilter emptyFilter {ifSkills = ["laceration"]} helmAttrs loc `shouldBe` False
+    it "requires all requested skill substrings" $
+      matchesFilter emptyFilter {ifSkills = ["all skills", "laceration"]} helmAttrs loc
+        `shouldBe` False
+    it "matches any-skill query (empty string) only when a bonus is present" $ do
+      matchesFilter emptyFilter {ifSkills = [""]} helmAttrs loc `shouldBe` True
+      matchesFilter emptyFilter {ifSkills = [""]} helmAttrs {iaSkillBonuses = []} loc
+        `shouldBe` False
 
   describe "itemRows (real data smoke test)" $
     it "a composed query returns consistent rows" $
