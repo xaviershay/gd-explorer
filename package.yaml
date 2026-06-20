@@ -1,82 +1,82 @@
-name:                gd-explorer
-version:             0.1.0.0
-github:              "githubuser/gd-explorer"
-license:             BSD-3-Clause
-author:              "Author name here"
-maintainer:          "example@example.com"
-copyright:           "2026 Author name here"
+name: gd-explorer
+version: 0.1.0.0
+github: "githubuser/gd-explorer"
+license: BSD-3-Clause
+author: "Author name here"
+maintainer: "example@example.com"
+copyright: "2026 Author name here"
 
 extra-source-files:
-- README.md
-- CHANGELOG.md
+    - README.md
+    - CHANGELOG.md
 
-description:         Please see the README on GitHub at <https://github.com/githubuser/gd-explorer#readme>
+description: Please see the README on GitHub at <https://github.com/githubuser/gd-explorer#readme>
 
 dependencies:
-- base >= 4.7 && < 5
+    - base >= 4.7 && < 5
 
 default-extensions:
-- OverloadedStrings
-- LambdaCase
-- ScopedTypeVariables
-- TupleSections
-- BangPatterns
-- RecordWildCards
-- MultiWayIf
+    - OverloadedStrings
+    - LambdaCase
+    - ScopedTypeVariables
+    - TupleSections
+    - BangPatterns
+    - RecordWildCards
+    - MultiWayIf
 
 ghc-options:
-- -Wall
-- -Wcompat
-- -Widentities
-- -Wincomplete-record-updates
-- -Wincomplete-uni-patterns
-- -Wmissing-home-modules
-- -Wpartial-fields
-- -Wredundant-constraints
+    - -Wall
+    - -Wcompat
+    - -Widentities
+    - -Wincomplete-record-updates
+    - -Wincomplete-uni-patterns
+    - -Wmissing-home-modules
+    - -Wpartial-fields
+    - -Wredundant-constraints
 
 library:
-  source-dirs: src
-  c-sources:
-  - cbits/lz4_shim.c
-  dependencies:
-  - bytestring
-  - containers
-  - unordered-containers
-  - text
-  - vector
-  - directory
-  - filepath
-  - mtl
-  - optparse-applicative
+    source-dirs: src
+    c-sources:
+        - cbits/lz4_shim.c
+    dependencies:
+        - bytestring
+        - containers
+        - unordered-containers
+        - text
+        - vector
+        - directory
+        - filepath
+        - mtl
+        - optparse-applicative
 
 executables:
-  gd-explorer-exe:
-    main:                Main.hs
-    source-dirs:         app
-    ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
-    dependencies:
-    - gd-explorer
-    - optparse-applicative
-    - text
+    gd-explorer:
+        main: Main.hs
+        source-dirs: app
+        ghc-options:
+            - -threaded
+            - -rtsopts
+            - -with-rtsopts=-N
+        dependencies:
+            - gd-explorer
+            - optparse-applicative
+            - text
 
 tests:
-  gd-explorer-test:
-    main:                Spec.hs
-    source-dirs:         test
-    ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
-    dependencies:
-    - gd-explorer
-    - hspec
-    - bytestring
-    - containers
-    - unordered-containers
-    - text
-    - directory
-    - filepath
-    - optparse-applicative
+    gd-explorer-test:
+        main: Spec.hs
+        source-dirs: test
+        ghc-options:
+            - -threaded
+            - -rtsopts
+            - -with-rtsopts=-N
+        dependencies:
+            - gd-explorer
+            - hspec
+            - bytestring
+            - containers
+            - unordered-containers
+            - text
+            - directory
+            - filepath
+            - optparse-applicative

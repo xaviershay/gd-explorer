@@ -68,7 +68,7 @@ library
     , vector
   default-language: Haskell2010
 
-executable gd-explorer-exe
+executable gd-explorer
   main-is: Main.hs
   other-modules:
       Paths_gd_explorer
