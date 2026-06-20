@@ -5,6 +5,7 @@ module GrimDawn.Report.Color
   ( rarityColor
   , typeColor
   , applyColor
+  , colorByType
   ) where
 
 import Data.Text (Text)
@@ -27,18 +28,33 @@ rarityColor r = case T.toLower r of
 -- Returns 'Nothing' for unknown types (rendered uncoloured).
 typeColor :: Text -> Maybe Text
 typeColor t = case T.toLower t of
-  "physical" -> Just "\ESC[38;5;250m" -- off-white
+  "physical" -> phys
+  "trauma" -> phys -- Internal Trauma (DoT physical)
   "pierce" -> Just "\ESC[38;5;252m" -- light grey
-  "fire" -> Just "\ESC[38;5;208m" -- orange
-  "cold" -> Just "\ESC[38;5;45m" -- light blue
-  "lightning" -> Just "\ESC[38;5;226m" -- yellow
-  "poison" -> Just "\ESC[38;5;70m" -- green
+  "fire" -> fire
+  "burn" -> fire -- DoT fire
+  "cold" -> cold
+  "frostburn" -> cold -- DoT cold
+  "lightning" -> lightning
+  "electrocute" -> lightning -- DoT lightning
+  "poison" -> poison
+  "acid" -> poison -- immediate poison damage
   "aether" -> Just "\ESC[38;5;192m" -- pale yellow-green
   "chaos" -> Just "\ESC[38;5;88m" -- dark red
-  "vitality" -> Just "\ESC[38;5;127m" -- purple
-  "bleed" -> Just "\ESC[38;5;196m" -- red
+  "vitality" -> vitality
+  "decay" -> vitality -- Vitality Decay (DoT vitality)
+  "bleed" -> bleed
+  "bleeding" -> bleed
   "elemental" -> Just "\ESC[38;5;159m" -- pale cyan
   _ -> Nothing
+  where
+    phys = Just "\ESC[38;5;250m" -- off-white
+    fire = Just "\ESC[38;5;208m" -- orange
+    cold = Just "\ESC[38;5;45m" -- light blue
+    lightning = Just "\ESC[38;5;226m" -- yellow
+    poison = Just "\ESC[38;5;70m" -- green
+    vitality = Just "\ESC[38;5;127m" -- purple
+    bleed = Just "\ESC[38;5;196m" -- red
 
 ansiReset :: Text
 ansiReset = "\ESC[0m"
@@ -48,3 +64,11 @@ ansiReset = "\ESC[0m"
 applyColor :: Bool -> Maybe Text -> Text -> Text
 applyColor True (Just c) txt = c <> txt <> ansiReset
 applyColor _ _ txt = txt
+
+-- | Colour a rendered resistance/damage entry by the first recognised damage
+-- type word it contains (e.g. "Acid" in "32% Acid", "Burn" in "+30 Burn over 3s").
+colorByType :: Bool -> Text -> Text
+colorByType useColor s =
+  case [c | w <- T.words s, Just c <- [typeColor w]] of
+    (c : _) -> applyColor useColor (Just c) s
+    [] -> s

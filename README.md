@@ -84,8 +84,19 @@ gd-explorer sets --data-dir /path/to/data
 Each filter narrows the results (they combine as AND); `--resist`, `--damage`,
 and `--skill` may be repeated. Each matching item is printed as a short block: a header line
 with name, **rarity**, slot, level requirement, location, and count, followed by
-indented detail lines for resistances, **damage bonuses** (`+` flat and `%`
-modifiers), and **skill bonuses** (only the lines that apply are shown).
+indented detail lines for resistances (with their percentages), **damage
+bonuses** (`+` flat and `%` modifiers), **stat bonuses**, and **skill bonuses**
+(only the lines that apply are shown).
+
+Damage types follow Grim Dawn's immediate/damage-over-time distinction: the bare
+element field is the immediate hit (Fire, Cold, Lightning, **Acid**, Physical,
+Vitality, …) while the "Slow" variant is the DoT, shown over its duration
+(**Burn**, **Frostburn**, **Electrocute**, **Poison**, **Internal Trauma**,
+**Vitality Decay**) — e.g. `+30 Burn over 3s`. The stat-bonus labels (and this
+naming) are ported from gd-edit's `effect-string-map` / `effect-types`, so
+coverage matches gd-edit: attributes, health/energy and regen, OA/DA, armor and
+absorption, speeds, experience gain, leech, retaliation, crit/total damage,
+block, control/maximum resistances, and more.
 
 When writing to a terminal, the rarity tag and the resistance / damage types are
 coloured to match Grim Dawn's in-game colours (rarity: Magical yellow, Rare
@@ -103,17 +114,63 @@ gd-explorer items --type ring --resist chaos
 
 ```
 Baldir's Mask [Epic] head lvl 65 — shared stash x1
-    resists: chaos, cold, fire, lightning
+    resists: 18% Chaos, 22% Cold, 22% Fire, 22% Lightning
     damage : 44% Physical
+    bonuses: +222 Armor, +180 Health, +30 Offensive Ability
     skills : +2 Judgment, +2 Blade Arc
 Champion of the Light [Epic] axe2h lvl 72 — Adam (stash) x1
     damage : +260-300 Lightning, 120% Lightning
     skills : +4 Oak Skin, +4 Counter Strike
 ```
 
-Damage and skill bonuses are aggregated from the item's base and affix records.
-Per the record-level approach, ranges shown reflect the database values, not the
-exact per-item roll.
+Damage, stat, and skill bonuses are aggregated from the item's base and affix
+records. Per the record-level approach, ranges shown reflect the database
+values, not the exact per-item roll.
+
+### `character` — a character's gear, skills, and devotions
+
+```sh
+gd-explorer character             # list character names
+gd-explorer character xavier      # full report for one character
+```
+
+Prints the character's level and class, every equipped item (same block format
+as `items`), the **active set bonuses** (aggregated per set, with the equipped
+piece count — not repeated on each item), their skills grouped by mastery (with
+the mastery rank), and their devotions grouped by constellation (star counts and
+the celestial power each grants). Colouring follows the same terminal-only rule
+as `items`.
+
+```
+xavier  —  Level 41  Elementalist
+
+Equipped:
+  Gunslinger's Jacket [Epic] chest lvl 20
+    resists: 18% Vitality
+    damage : 40% Fire, 40% Vitality
+    bonuses: +130 Armor, +26 Cunning, +5% Attack Speed
+    skills : +3 Flame Touched, Grants Gunslinger
+
+Set Bonuses:
+  Perdition  (3/5)
+    damage : 50% Poison
+    bonuses: Increases Armor by 10%, +50% Poison Retaliation
+
+Skills:
+  Demolitionist (40)
+    +12 Flame Touched
+    +12 Blackwater Cocktail
+  Shaman (26)
+    +10 Summon Briarthorn
+
+Devotions (19 points):
+  Imp  (5 stars)  grants Aetherfire
+  Fiend  (5 stars)  grants Flame Torrent
+```
+
+The set bonus shown reflects the tier active at the current piece count; set
+bonus fields are arrays indexed by pieces-equipped, resolved against the same
+renderer used for item bonuses.
 
 More examples:
 

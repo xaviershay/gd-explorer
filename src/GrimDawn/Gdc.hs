@@ -1,7 +1,8 @@
 -- | Character @.gdc@ reader. Port of the read half of gd-edit's
--- @io/gdc.clj@, simplified to only fully decode the two blocks we need —
--- block 3 (inventory + equipment) and block 4 (personal stash) — while
--- skipping every other block by advancing the cipher over its raw body.
+-- @io/gdc.clj@, simplified to only fully decode the blocks we need —
+-- block 3 (inventory + equipment), block 4 (personal stash), and the skill
+-- array of block 8 (skills + devotions) — while skipping every other block by
+-- advancing the cipher over its raw body.
 module GrimDawn.Gdc
   ( Item (..)
   , emptyItemName

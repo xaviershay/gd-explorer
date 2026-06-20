@@ -1,8 +1,9 @@
--- | Command-line interface. Two one-shot subcommands:
+-- | Command-line interface. One-shot subcommands:
 --
 -- > gd-explorer sets [--all] [--data-dir DIR]
 -- > gd-explorer items [--type T] [--resist R]... [--damage D]... [--skill S]... [--set]
 -- >                   [--char NAME] [--min-level N] [--max-level N] [--data-dir DIR]
+-- > gd-explorer character [NAME] [--data-dir DIR]
 module GrimDawn.Cli
   ( runCli
   , Command (..)

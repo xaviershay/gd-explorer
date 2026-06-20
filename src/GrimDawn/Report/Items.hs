@@ -20,7 +20,7 @@ import GrimDawn.Aggregate (Location, OwnedItem (..), locationLabel)
 import GrimDawn.Db (GameDb)
 import GrimDawn.Gdc (itemStackCount)
 import GrimDawn.Item (ItemAttrs (..), itemAttrs)
-import GrimDawn.Report.Color (applyColor, rarityColor, typeColor)
+import GrimDawn.Report.Color (applyColor, colorByType, rarityColor)
 
 -- | A conjunction of filter criteria; 'emptyFilter' matches everything.
 data ItemFilter = ItemFilter
@@ -46,6 +46,7 @@ data ItemRow = ItemRow
   , irLevel :: !(Maybe Int)
   , irResists :: ![Text]
   , irDamage :: ![Text] -- rendered damage bonuses (+/%)
+  , irBonuses :: ![Text] -- rendered stat bonuses (armor, OA/DA, xp, ...)
   , irSkills :: ![Text] -- rendered skill bonuses
   , irLocation :: !Text
   , irCount :: !Int
@@ -107,8 +108,9 @@ itemRows db flt owned =
         , irRarity = iaClassification a
         , irType = maybe "" id (iaType a)
         , irLevel = iaLevelRequirement a
-        , irResists = Set.toList (iaResists a)
+        , irResists = iaResistBonuses a
         , irDamage = iaDamageBonuses a
+        , irBonuses = iaBonuses a
         , irSkills = iaSkillBonuses a
         , irLocation = locationLabel (oiLocation oi)
         , irCount = max 1 (fromIntegral (itemStackCount (oiItem oi)))
@@ -141,15 +143,11 @@ renderItems useColor = T.unlines . concatMap renderOne
        in applyColor useColor (rarityColor x) tag
     detailLines r =
       catMaybes
-        [ field "resists" (T.intercalate ", " (map colorResist (irResists r)))
-        , field "damage " (T.intercalate ", " (map colorDamage (irDamage r)))
+        [ field "resists" (T.intercalate ", " (map (colorByType useColor) (irResists r)))
+        , field "damage " (T.intercalate ", " (map (colorByType useColor) (irDamage r)))
+        , field "bonuses" (T.intercalate ", " (irBonuses r))
         , field "skills " (T.intercalate ", " (irSkills r))
         ]
-    -- a resistance is named by its type; a damage bonus is coloured by the
-    -- damage type in its trailing word (e.g. "Fire" in "+12-18 Fire").
-    colorResist t = applyColor useColor (typeColor t) t
-    colorDamage s = applyColor useColor (typeColor (lastWord s)) s
-    lastWord s = case T.words s of [] -> s; ws -> last ws
     field label v
       | T.null v = Nothing
       | otherwise = Just ("    " <> label <> ": " <> v)

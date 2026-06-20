@@ -1,6 +1,7 @@
 module GrimDawn.Report.ItemsSpec (spec) where
 
 import qualified Data.Set as Set
+import qualified Data.Text as T
 import GrimDawn.Aggregate (Location (..), loadOwnedItems)
 import GrimDawn.Db (loadGameDb)
 import GrimDawn.Item (ItemAttrs (..))
@@ -18,8 +19,10 @@ helmAttrs =
     , iaClassification = Just "Legendary"
     , iaLevelRequirement = Just 65
     , iaResists = Set.fromList ["fire", "cold"]
+    , iaResistBonuses = ["45% Fire", "40% Cold"]
     , iaDamage = Set.empty
     , iaDamageBonuses = []
+    , iaBonuses = []
     , iaSkillBonuses = ["+1 to all Skills", "Grants Ring of Steel"]
     , iaIsSet = False
     , iaSetRecord = Nothing
@@ -69,4 +72,4 @@ spec = do
         let rows = itemRows db emptyFilter {ifType = Just "helm", ifResists = ["fire"]} owned
         length rows > 0 `shouldBe` True
         all (\r -> irType r == "head") rows `shouldBe` True
-        all (\r -> "fire" `elem` irResists r) rows `shouldBe` True
+        all (\r -> any ("Fire" `T.isInfixOf`) (irResists r)) rows `shouldBe` True

@@ -1,7 +1,9 @@
 module GrimDawn.ItemSpec (spec) where
 
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Set as Set
 import qualified Data.Text as T
+import GrimDawn.Arz (Value (..))
 import GrimDawn.Db (loadGameDb)
 import GrimDawn.Gdc
   ( Item (..)
@@ -36,6 +38,29 @@ blankItem =
 
 spec :: Spec
 spec = do
+  describe "damageBonuses immediate vs damage-over-time naming" $
+    it "names offensivePoison as Acid and offensiveSlowFire as Burn" $ do
+      let rec =
+            HM.fromList
+              [ ("offensivePoisonMin", VFloat 8)
+              , ("offensivePoisonMax", VFloat 15)
+              , ("offensivePoisonModifier", VFloat 50)
+              , ("offensiveFireMin", VFloat 5)
+              , ("offensiveFireMax", VFloat 9)
+              , ("offensiveSlowFireMin", VFloat 10)
+              , ("offensiveSlowFireDurationMin", VFloat 3)
+              , ("offensiveSlowFireModifier", VFloat 44)
+              ]
+          out = damageBonuses [("r", rec)]
+      -- the bare element field is immediate ("Acid"), not the DoT ("Poison")
+      ("+8-15 Acid" `elem` out) `shouldBe` True
+      ("50% Acid" `elem` out) `shouldBe` True
+      any ("Poison" `T.isInfixOf`) out `shouldBe` False
+      -- the Slow variant is the DoT ("Burn"), shown over its duration
+      ("+5-9 Fire" `elem` out) `shouldBe` True
+      ("+30 Burn over 3s" `elem` out) `shouldBe` True
+      ("44% Burn" `elem` out) `shouldBe` True
+
   describe "relatedRecordNames" $
     it "keeps only non-empty records/ paths from the name fields" $ do
       let it_ =

@@ -7,15 +7,25 @@ module GrimDawn.Report.Character
 
 import Data.Char (isDigit)
 import qualified Data.HashMap.Strict as HM
-import Data.List (foldl', nub)
+import Data.List (nub)
 import Data.Maybe (catMaybes, listToMaybe)
-import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import GrimDawn.Db (GameDb (..))
+import GrimDawn.Arz (Record, Value (..), lookupField, valueText)
+import GrimDawn.Db (GameDb (..), lookupRecord)
 import GrimDawn.Gdc (Character (..), Skill (..), emptyItemName)
-import GrimDawn.Item (ItemAttrs (..), itemAttrs, skillDisplayName)
-import GrimDawn.Report.Color (applyColor, rarityColor, typeColor)
+import GrimDawn.Item
+  ( ItemAttrs (..)
+  , characterBonuses
+  , damageBonuses
+  , itemAttrs
+  , resistBonuses
+  , setRecordName
+  , skillBonuses
+  , skillDisplayName
+  )
+import GrimDawn.Report.Color (applyColor, colorByType, rarityColor)
+import GrimDawn.Report.Sets (setMemberNames)
 
 -- | Render a character's header, equipped gear, skills, and devotions.
 renderCharacter :: Bool -> GameDb -> Character -> Text
@@ -25,6 +35,8 @@ renderCharacter useColor db c =
       : ""
       : "Equipped:"
       : concatMap itemBlock equipped
+      ++ blank setLines
+      ++ setLines
       ++ blank skillLines
       ++ skillLines
       ++ blank devotionLines
@@ -61,13 +73,54 @@ renderCharacter useColor db c =
           , (\n -> "lvl " <> tshow n) <$> iaLevelRequirement a
           ]
     detailsOf a =
+      detailLinesFrom (iaResistBonuses a) (iaDamageBonuses a) (iaBonuses a) (iaSkillBonuses a)
+
+    -- the indented "resists/damage/bonuses/skills" lines shared by items and sets.
+    detailLinesFrom resists damage bonuses skills =
       catMaybes
-        [ field "resists" (T.intercalate ", " (map colorResist (Set.toList (iaResists a))))
-        , field "damage " (T.intercalate ", " (map colorDamage (iaDamageBonuses a)))
-        , field "skills " (T.intercalate ", " (iaSkillBonuses a))
+        [ field "resists" (T.intercalate ", " (map (colorByType useColor) resists))
+        , field "damage " (T.intercalate ", " (map (colorByType useColor) damage))
+        , field "bonuses" (T.intercalate ", " bonuses)
+        , field "skills " (T.intercalate ", " skills)
         ]
-    colorResist t = applyColor useColor (typeColor t) t
-    colorDamage s = applyColor useColor (typeColor (lastWord s)) s
+
+    --------------------------------------------------------------------------
+    -- Set bonuses (aggregated per set, not repeated on each item)
+    --------------------------------------------------------------------------
+    setLines
+      | null setBlocks = []
+      | otherwise = "Set Bonuses:" : concat setBlocks
+
+    -- set records of equipped pieces, in first-seen order, with equipped count.
+    equippedSetRecs = [s | it <- equipped, Just s <- [setRecordName it db]]
+    setEntries = [(s, length (filter (== s) equippedSetRecs)) | s <- nub equippedSetRecs]
+
+    setBlocks = [b | (rec, cnt) <- setEntries, let b = renderSet rec cnt, not (null b)]
+
+    renderSet setRec cnt =
+      case lookupRecord setRec db of
+        Nothing -> []
+        Just r ->
+          let related = [(setRec, resolveSetTier cnt r)]
+              detail =
+                detailLinesFrom
+                  (resistBonuses related)
+                  (damageBonuses related)
+                  (characterBonuses related)
+                  (skillBonuses db related)
+              total = length (setMemberNames r)
+              name = maybe setRec id (lookupField "setName" r >>= valueText)
+              header = "  " <> name <> "  (" <> tshow cnt <> "/" <> tshow total <> ")"
+           in if null detail then [] else header : map ("    " <>) detail
+
+    -- collapse each array bonus field to the value for the equipped piece count
+    -- (arrays are indexed by pieces-1; scalars and string fields pass through).
+    resolveSetTier :: Int -> Record -> Record
+    resolveSetTier cnt = HM.map pick
+      where
+        idx = max 0 (cnt - 1)
+        pick (VList xs) | not (null xs) = xs !! min idx (length xs - 1)
+        pick v = v
 
     --------------------------------------------------------------------------
     -- Skills (grouped by mastery)
@@ -136,7 +189,6 @@ renderCharacter useColor db c =
       | T.null v = Nothing
       | otherwise = Just (label <> ": " <> v)
     nonEmpty t = if T.null t then Nothing else Just t
-    lastWord s = case T.words s of [] -> s; ws -> last ws
     lastSeg p = case T.splitOn "/" p of [] -> p; ws -> last ws
 
 tshow :: Show a => a -> Text
