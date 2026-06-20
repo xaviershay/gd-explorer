@@ -1,6 +1,6 @@
 module Main (main) where
 
-import Lib
+import GrimDawn.Cli (runCli)
 
 main :: IO ()
-main = someFunc
+main = runCli

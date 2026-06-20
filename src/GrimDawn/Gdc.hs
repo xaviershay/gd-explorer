@@ -1,0 +1,244 @@
+-- | Character @.gdc@ reader. Port of the read half of gd-edit's
+-- @io/gdc.clj@, simplified to only fully decode the two blocks we need —
+-- block 3 (inventory + equipment) and block 4 (personal stash) — while
+-- skipping every other block by advancing the cipher over its raw body.
+module GrimDawn.Gdc
+  ( Item (..)
+  , emptyItemName
+  , Character (..)
+  , loadCharacter
+  , loadCharacterFile
+    -- * Shared item reader (re-used by the stash reader)
+  , decItem
+  , decArray
+  ) where
+
+import Control.Monad (replicateM, unless, when)
+import qualified Data.ByteString as BS
+import Data.Int (Int32)
+import Data.Text (Text)
+import qualified Data.Text as T
+import GrimDawn.Cipher
+
+-- | A parsed inventory/equipment/stash item. Mirrors gd-edit's @Item@ struct.
+-- An item with an empty 'itemBaseName' denotes an empty slot.
+data Item = Item
+  { itemBaseName :: !Text
+  , itemPrefixName :: !Text
+  , itemSuffixName :: !Text
+  , itemModifierName :: !Text
+  , itemTransmuteName :: !Text
+  , itemSeed :: !Int32
+  , itemRelicName :: !Text
+  , itemRelicBonus :: !Text
+  , itemRelicSeed :: !Int32
+  , itemAugmentName :: !Text
+  , itemUnknown :: !Int32
+  , itemAugmentSeed :: !Int32
+  , itemRelicCompletionLevel :: !Int32
+  , itemStackCount :: !Int32
+  }
+  deriving (Show, Eq)
+
+-- | True when an item slot is empty (no basename).
+emptyItemName :: Item -> Bool
+emptyItemName = T.null . itemBaseName
+
+-- | A character loaded from a @player.gdc@. Item lists are flattened across
+-- their containers (sacks / stash tabs) with empty slots removed.
+data Character = Character
+  { charName :: !Text
+  , charClassName :: !Text
+  , charLevel :: !Int32
+  , charHardcore :: !Bool
+  , charEquipped :: ![Item]
+  , charInventory :: ![Item]
+  , charPersonalStash :: ![Item]
+  }
+  deriving (Show, Eq)
+
+-- "GDCX" as a little-endian int32.
+gdcxMagic :: Int32
+gdcxMagic = 0x58434447
+
+--------------------------------------------------------------------------------
+-- Item + array primitives
+--------------------------------------------------------------------------------
+
+-- | Decode an int32-count-prefixed array.
+decArray :: Dec a -> Dec [a]
+decArray g = do
+  n <- fromIntegral <$> decInt
+  replicateM n g
+
+decItem :: Dec Item
+decItem =
+  Item
+    <$> decAscii -- basename
+    <*> decAscii -- prefix
+    <*> decAscii -- suffix
+    <*> decAscii -- modifier
+    <*> decAscii -- transmute
+    <*> decInt -- seed
+    <*> decAscii -- relic-name
+    <*> decAscii -- relic-bonus
+    <*> decInt -- relic-seed
+    <*> decAscii -- augment-name
+    <*> decInt -- unknown
+    <*> decInt -- augment-seed
+    <*> decInt -- relic-completion-level
+    <*> decInt -- stack-count
+
+-- equipment item = item + attached bool
+decEquipmentItem :: Dec Item
+decEquipmentItem = decItem <* decBool
+
+-- inventory / stash item = item + X,Y int32
+decGridItem :: Dec Item
+decGridItem = decItem <* decInt <* decInt
+
+--------------------------------------------------------------------------------
+-- Block framing
+--------------------------------------------------------------------------------
+
+-- | Read a length-delimited sub-block (id + length + body + checksum) whose
+-- body we always decode. Used for inventory sacks and stash tabs (id 0).
+readSubBlock :: Dec a -> Dec a
+readSubBlock body = do
+  _id <- decInt
+  len <- fromIntegral <$> decU32NoAdvance
+  start <- decPos
+  x <- body
+  end <- decPos
+  unless (end - start == len) $
+    fail ("sub-block length mismatch: expected " ++ show len ++ " got " ++ show (end - start))
+  verifyChecksum
+  pure x
+
+verifyChecksum :: Dec ()
+verifyChecksum = do
+  chk <- rawWord32
+  st <- getState
+  when (chk /= st) $ fail "block checksum mismatch"
+
+--------------------------------------------------------------------------------
+-- Block 3 (inventory + equipment)
+--------------------------------------------------------------------------------
+
+-- Returns (equipment items, inventory items) flattened, empties not yet removed.
+readBlock3 :: Dec ([Item], [Item])
+readBlock3 = do
+  _version <- decInt
+  hasData <- decBool
+  if not hasData
+    then pure ([], [])
+    else do
+      sackCount <- fromIntegral <$> decInt
+      _focused <- decInt
+      _selected <- decInt
+      sacks <- replicateM sackCount (readSubBlock readInventorySack)
+      _useAlt <- decBool
+      equipment <- replicateM 12 decEquipmentItem
+      _alt1 <- decBool
+      alt1set <- replicateM 2 decEquipmentItem
+      _alt2 <- decBool
+      alt2set <- replicateM 2 decEquipmentItem
+      pure (equipment ++ alt1set ++ alt2set, concat sacks)
+
+-- InventorySack: unused bool + array of inventory items
+readInventorySack :: Dec [Item]
+readInventorySack = do
+  _unused <- decBool
+  decArray decGridItem
+
+--------------------------------------------------------------------------------
+-- Block 4 (personal stash)
+--------------------------------------------------------------------------------
+
+readBlock4 :: Dec [Item]
+readBlock4 = do
+  _version <- decInt
+  stashCount <- fromIntegral <$> decInt
+  stashes <- replicateM stashCount (readSubBlock readStash)
+  pure (concat stashes)
+
+-- Stash tab: width + height + array of grid items
+readStash :: Dec [Item]
+readStash = do
+  _width <- decInt
+  _height <- decInt
+  decArray decGridItem
+
+--------------------------------------------------------------------------------
+-- Top-level file
+--------------------------------------------------------------------------------
+
+readHeader :: Dec (Text, Bool, Text, Int32, Bool)
+readHeader = do
+  name <- decUtf16le
+  male <- decBool
+  className <- decAscii
+  level <- decInt
+  hardcore <- decBool
+  _expansion <- decByte
+  pure (name, male, className, level, hardcore)
+
+-- top-level block loop, accumulating block 3 + block 4 results
+readBlocks :: ([Item], [Item]) -> [Item] -> Dec (([Item], [Item]), [Item])
+readBlocks acc3 acc4 = do
+  done <- (<= 0) <$> decRemaining
+  if done
+    then pure (acc3, acc4)
+    else do
+      blockId <- decInt
+      len <- fromIntegral <$> decU32NoAdvance
+      start <- decPos
+      (acc3', acc4') <- case blockId of
+        3 -> do
+          r <- readBlock3
+          pure (r, acc4)
+        4 -> do
+          r <- readBlock4
+          pure (acc3, r)
+        _ -> do
+          advanceOver len
+          pure (acc3, acc4)
+      end <- decPos
+      unless (end - start == len) $
+        fail ("block " ++ show blockId ++ " length mismatch: expected "
+                ++ show len ++ " got " ++ show (end - start))
+      verifyChecksum
+      readBlocks acc3' acc4'
+
+-- | Parse a character from the raw bytes of a @player.gdc@ file.
+loadCharacter :: BS.ByteString -> Either String Character
+loadCharacter raw = do
+  (cipher, pos0) <- initCipher raw
+  (\(c, _, _) -> c) <$> runDec parseAll raw pos0 cipher
+  where
+    parseAll :: Dec Character
+    parseAll = do
+      magic <- decInt
+      _version <- decInt
+      when (magic /= gdcxMagic) $ fail "not a GDCX character file"
+      (name, _male, className, level, hardcore) <- readHeader
+      verifyChecksum -- header checksum
+      dataVersion <- decInt
+      unless (dataVersion `elem` [6, 7, 8]) $
+        fail ("unsupported gdc data-version " ++ show dataVersion)
+      _mystery <- decStaticBytes 16
+      ((equip, inv), pstash) <- readBlocks ([], []) []
+      let keep = filter (not . emptyItemName)
+      pure Character
+        { charName = name
+        , charClassName = className
+        , charLevel = level
+        , charHardcore = hardcore
+        , charEquipped = keep equip
+        , charInventory = keep inv
+        , charPersonalStash = keep pstash
+        }
+
+-- | Load and parse a character file from disk.
+loadCharacterFile :: FilePath -> IO (Either String Character)
+loadCharacterFile fp = loadCharacter <$> BS.readFile fp
