@@ -11,7 +11,7 @@ import Data.List (nub)
 import Data.Maybe (catMaybes, listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import GrimDawn.Arz (Record, Value (..), lookupField, valueText)
+import GrimDawn.Arz (lookupField, valueText)
 import GrimDawn.Db (GameDb (..), lookupRecord)
 import GrimDawn.Gdc (Character (..), Skill (..), emptyItemName)
 import GrimDawn.Item
@@ -20,6 +20,7 @@ import GrimDawn.Item
   , damageBonuses
   , itemAttrs
   , resistBonuses
+  , resolveSetTier
   , setRecordName
   , skillBonuses
   , skillDisplayName
@@ -112,15 +113,6 @@ renderCharacter useColor db c =
               name = maybe setRec id (lookupField "setName" r >>= valueText)
               header = "  " <> name <> "  (" <> tshow cnt <> "/" <> tshow total <> ")"
            in if null detail then [] else header : map ("    " <>) detail
-
-    -- collapse each array bonus field to the value for the equipped piece count
-    -- (arrays are indexed by pieces-1; scalars and string fields pass through).
-    resolveSetTier :: Int -> Record -> Record
-    resolveSetTier cnt = HM.map pick
-      where
-        idx = max 0 (cnt - 1)
-        pick (VList xs) | not (null xs) = xs !! min idx (length xs - 1)
-        pick v = v
 
     --------------------------------------------------------------------------
     -- Skills (grouped by mastery)

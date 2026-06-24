@@ -74,8 +74,19 @@ data Character = Character
   , charInventory :: ![Item]
   , charPersonalStash :: ![Item]
   , charSkills :: ![Skill]
+  , -- | Allocated attributes from the bio block (base + level + spent points,
+    -- before mastery/gear bonuses).
+    charPhysique :: !Double
+  , charCunning :: !Double
+  , charSpirit :: !Double
   }
   deriving (Show, Eq)
+
+-- bio block (id 2) values we keep: physique, cunning, spirit.
+data Bio = Bio !Double !Double !Double
+
+emptyBio :: Bio
+emptyBio = Bio 0 0 0
 
 -- "GDCX" as a little-endian int32.
 gdcxMagic :: Int32
@@ -206,6 +217,27 @@ readStash = do
   decArray decGridItem
 
 --------------------------------------------------------------------------------
+-- Block 2 (bio: attributes)
+--------------------------------------------------------------------------------
+
+-- Bio block: version, level, experience, the three point pools, then the three
+-- attributes and base health/energy. We keep only the attributes; the caller
+-- advances over anything after.
+readBlock2 :: Dec Bio
+readBlock2 = do
+  _version <- decInt
+  _level <- decInt
+  _experience <- decInt
+  _attrPoints <- decInt
+  _skillPoints <- decInt
+  _devotionPoints <- decInt
+  _totalDevotionUnlocked <- decInt
+  phys <- decFloat
+  cun <- decFloat
+  spi <- decFloat
+  pure (Bio (realToFrac phys) (realToFrac cun) (realToFrac spi))
+
+--------------------------------------------------------------------------------
 -- Block 8 (skills + devotions)
 --------------------------------------------------------------------------------
 
@@ -231,38 +263,43 @@ readHeader = do
   _expansion <- decByte
   pure (name, male, className, level, hardcore)
 
--- top-level block loop, accumulating block 3 (items) + 4 (stash) + 8 (skills)
-readBlocks :: ([Item], [Item]) -> [Item] -> [Skill] -> Dec (([Item], [Item]), [Item], [Skill])
-readBlocks acc3 acc4 acc8 = do
+-- top-level block loop, accumulating block 2 (bio) + 3 (items) + 4 (stash) + 8 (skills)
+readBlocks :: Bio -> ([Item], [Item]) -> [Item] -> [Skill] -> Dec (Bio, ([Item], [Item]), [Item], [Skill])
+readBlocks acc2 acc3 acc4 acc8 = do
   done <- (<= 0) <$> decRemaining
   if done
-    then pure (acc3, acc4, acc8)
+    then pure (acc2, acc3, acc4, acc8)
     else do
       blockId <- decInt
       len <- fromIntegral <$> decU32NoAdvance
       start <- decPos
-      (acc3', acc4', acc8') <- case blockId of
+      (acc2', acc3', acc4', acc8') <- case blockId of
+        2 -> do
+          r <- readBlock2
+          cur <- decPos
+          advanceOver (len - (cur - start))
+          pure (r, acc3, acc4, acc8)
         3 -> do
           r <- readBlock3
-          pure (r, acc4, acc8)
+          pure (acc2, r, acc4, acc8)
         4 -> do
           r <- readBlock4
-          pure (acc3, r, acc8)
+          pure (acc2, acc3, r, acc8)
         8 -> do
           r <- readBlock8
           -- skip any trailing fields (masteries-allowed, item skills, ...)
           cur <- decPos
           advanceOver (len - (cur - start))
-          pure (acc3, acc4, r)
+          pure (acc2, acc3, acc4, r)
         _ -> do
           advanceOver len
-          pure (acc3, acc4, acc8)
+          pure (acc2, acc3, acc4, acc8)
       end <- decPos
       unless (end - start == len) $
         fail ("block " ++ show blockId ++ " length mismatch: expected "
                 ++ show len ++ " got " ++ show (end - start))
       verifyChecksum
-      readBlocks acc3' acc4' acc8'
+      readBlocks acc2' acc3' acc4' acc8'
 
 -- | Parse a character from the raw bytes of a @player.gdc@ file.
 loadCharacter :: BS.ByteString -> Either String Character
@@ -281,7 +318,7 @@ loadCharacter raw = do
       unless (dataVersion `elem` [6, 7, 8]) $
         fail ("unsupported gdc data-version " ++ show dataVersion)
       _mystery <- decStaticBytes 16
-      ((equip, inv), pstash, skills) <- readBlocks ([], []) [] []
+      (Bio phys cun spi, (equip, inv), pstash, skills) <- readBlocks emptyBio ([], []) [] []
       let keep = filter (not . emptyItemName)
       pure Character
         { charName = name
@@ -292,6 +329,9 @@ loadCharacter raw = do
         , charInventory = keep inv
         , charPersonalStash = keep pstash
         , charSkills = skills
+        , charPhysique = phys
+        , charCunning = cun
+        , charSpirit = spi
         }
 
 -- | Load and parse a character file from disk.

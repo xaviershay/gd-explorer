@@ -30,8 +30,33 @@ data/gd-data/
 ```
 
 DLC tiers are optional — whatever is present is loaded and merged, with later
-DLCs overriding earlier ones. The `scripts/fetch-gd-data.sh` helper can stage
-this subset from a Windows install (run under WSL).
+DLCs overriding earlier ones.
+
+### Staging the data (incl. from another machine)
+
+Grim Dawn is usually installed on a different machine. Two helper scripts collect
+just the ~100 MB subset above and can push it here over SSH (run them on the
+machine that has the game; they only need `bash` + `rsync`):
+
+- **`scripts/sync-data.sh <game-dir> <save-dir>`** — explicit paths, any OS. Add
+  `--to [user@]host:/path/to/gd-explorer/data/gd-data` to rsync it to this repo
+  over SSH (otherwise it writes locally to `data/gd-data`; `--dest DIR` overrides;
+  `--mirror` deletes stale remote files):
+
+  ```sh
+  # on the Grim Dawn machine (after scp'ing the script over):
+  ./sync-data.sh --to me@devbox:/home/me/code/gd-explorer/data/gd-data \
+      "/path/to/Grim Dawn" "/path/to/.../My Games/Grim Dawn/save"
+  ```
+
+- **`scripts/fetch-gd-data.sh [user@host:/path/to/.../data/gd-data]`** — for a
+  Windows install under WSL: auto-detects the game install and saves (Documents
+  and Steam Cloud), then stages and rsyncs to the destination. With no
+  destination it stages locally and prints the path to copy yourself.
+
+Either way the result is the `data/gd-data` layout shown above. You can also pull
+from here instead of pushing, e.g.
+`rsync -avz me@gamebox:/tmp/gd-bundle/ data/gd-data/`.
 
 ## Build & test
 
@@ -171,6 +196,150 @@ Devotions (19 points):
 The set bonus shown reflects the tier active at the current piece count; set
 bonus fields are arrays indexed by pieces-equipped, resolved against the same
 renderer used for item bonuses.
+
+#### Stat totals
+
+The character view always ends with a **Stats** summary that aggregates totals
+across equipped gear, set bonuses, devotion passives, and mastery ranks:
+
+- **Resistances** with the difficulty penalty applied and the per-type cap
+  (default 80%, raised by any `+% maximum resistance`), flagging types left
+  negative as `LOW`. Choose the penalty tier with
+  `--difficulty normal|elite|ultimate` (0 / -25 / -50; default normal).
+- **Attributes** (Physique / Cunning / Spirit) as **absolute** totals: the
+  character's allocated base (from the save) plus mastery ranks, gear, devotions
+  and buffs, with the percent modifier applied.
+- **Defenses & Offense** (Offensive/Defensive Ability, Armor, Health, Energy):
+  the contribution from gear/mastery/buffs. These are *not* absolute — the innate
+  per-level OA/DA base lives in creature records that aren't in the extracted
+  database, so the per-level/attribute-derived base is not included.
+- **Weapon damage** per equipped weapon, and the total **damage bonuses** from
+  gear.
+
+```sh
+gd-explorer character Shield --difficulty ultimate
+```
+
+Skill buffs are opt-in via `--buffs` (a comma list of `permanent`, `temporary`,
+`proc`, or `all`/`none`; default `none`), mirroring Grim Tools' toggles. Buff
+values are resolved at the **effective** skill rank — the invested rank plus any
+`+all skills`, `+mastery` and `+specific skill` bonuses from gear and devotions —
+and skill **modifier** nodes (e.g. the resistances a node adds to an aura) are
+folded in under their parent skill's category. Attack skills are not folded in
+(their bonuses are conditional on using the ability).
+
+```sh
+gd-explorer character Shield --buffs permanent,temporary
+```
+
+#### `--overlay` — compare candidate gear
+
+`--overlay NAME` (repeatable) swaps an owned item (matched by name) into its slot
+on the base character and prints the stat **diff** (resistances and key totals as
+`base -> new (delta)`), so you can see the impact of a gear change:
+
+```sh
+gd-explorer character Shield --overlay "Faceguard of Perdition" --difficulty ultimate
+```
+
+```
+Overlaying: Faceguard of Perdition
+
+Overlay vs equipped  [Ultimate]
+
+Resistances:
+  Poison & Acid    -23% ->    1%  (+24)
+  Chaos             33% ->   21%  (-12)
+
+Defenses & Offense:
+  Armor                 +1218 ->   +1454  (+236)
+  Health                +1112 ->    +912  (-200)
+  Damage                +1180 ->   +1252  (+72)
+```
+
+### `upgrades` — search a slot for better gear
+
+Scores every owned item in a slot as an overlay and ranks the net-positive ones.
+The whole search runs in one process (the database loads once):
+
+```sh
+gd-explorer upgrades Shield --slot boots --difficulty ultimate
+```
+
+```
+boots that improve Shield (ultimate; weights resist=1 oa=50 da=50 damage=25), best first:
+
+    21059  lvl  84  Mythical Venomspine Greaves
+             Fire 45% -> 67% (+22); ...; Pierce -22% -> 13% (+35)  [DA +80, dmg +160]
+    14760  lvl  84  Mythical Boots of Primordial Rage
+             Chaos 33% -> 59% (+26); ...  [OA +88, dmg +260]
+```
+
+Each candidate is scored as a weighted sum of:
+
+- **resist** — non-linear: each resistance is penalised by the *square* of its
+  shortfall below `--target` (default 80), so a point of resist is worth more the
+  lower the resistance is. This favours raising your weakest resistances and
+  spreading losses (e.g. `-1` on eight beats `-8` on one).
+- **oa / da** — change in Offensive / Defensive Ability.
+- **damage** — change in a flat-plus-`%` offensive-value proxy.
+
+Tune the mix with `--weight CAT=FACTOR` (repeatable; `CAT` ∈ `resist oa da
+damage`); the defaults balance the components' scales. Other options: `--target`,
+`--max-level N` (only items requiring ≤ N), and `--buffs` (as for `character`).
+Resist types are coloured on a terminal, and each row shows the item's level
+requirement. `scripts/find-upgrades.sh [CHAR] [SLOT] [opts]` is a thin wrapper
+with positional character/slot.
+
+```sh
+# value damage twice as much, ignore OA/DA, only usable boots:
+gd-explorer upgrades Shield --slot boots --weight damage=2 --weight oa=0 --weight da=0 --max-level 45
+```
+
+### `dps` — estimate attack-skill damage
+
+Estimates per-hit and DPS for each invested attack skill (best first):
+
+```sh
+gd-explorer dps Shield
+```
+
+```
+Attack DPS estimate for Shield  (assumed base 1 atk/s; conversions + stacking DoT applied; no crit or enemy resistance)
+
+  Aegis of Menhir (18)          per-hit ~  29998  ~  15384 dps  (2.0s cooldown)
+        Physical ~2776; Acid ~22948; Vitality ~517; Internal Trauma (dot) ~223; Poison (dot) ~3511
+  Shattering Smash (11)         per-hit ~   2461  ~   2708 dps  (~1.1/s attacks (assumed base))
+        Physical ~348; Acid ~702; Vitality ~73; Internal Trauma (dot) ~822; Poison (dot) ~517
+  Weapon Attack                 per-hit ~   1195  ~   1314 dps  (~1.1/s attacks (assumed base))
+        Physical ~213; Acid ~462; Vitality ~46; Internal Trauma (dot) ~110; Poison (dot) ~364
+```
+
+Per type, per-hit = `(weapon-flat × weaponDamagePct + skill-flat) × (1 + %damage)`,
+with the skill resolved at its effective rank (including `+skills`) and the
+weapon-flat being your total flat damage (weapon base + gear). **Retaliation
+damage added to attack** is included too: a skill's `% retaliation added to
+attack` (global, or from a modifier like **Reprisal** on Avenging Shield) adds
+that fraction of your retaliation as weapon damage — which is why a high
+weapon-damage retaliation skill spikes. **Damage-type conversions are applied** —
+global ones from gear/devotions and skill-specific ones from a skill's
+transmuters/modifiers (e.g. Aegis of Thorns converting Avenging Shield's Fire to
+Acid), with converted damage picking up the destination type's `%` modifiers.
+DPS is `per-hit ÷ cooldown` for cooldown
+skills, or `per-hit × attacks/sec` for spam attacks using an **assumed** base
+attack speed (× your `+%` attack speed), since the real per-weapon base speed
+isn't in the extracted database. A primary attack also folds in its invested
+**transmuters/modifiers/secondaries** — their added flat damage (e.g. Volcanic
+Stride's hit on Vire's Might), conversions, retaliation-added, and cooldown
+changes (e.g. Tectonic Shift's −cooldown). **Damage-over-time** is included as a
+`(dot)` term: per-application total (per-second × duration, with duration/`%`
+modifiers) × the attack rate — valid because GD DoTs stack. **Chance-based
+cooldown resets** (e.g. Reprisal) count as expected value (`chance × reduction`).
+Conversions apply to the DoT too (e.g. Fire→Acid turns Burn into the Poison DoT).
+A bare **Weapon Attack** row (100% weapon damage, no skill) is always included as
+a baseline. This is a **rough, relative** estimate: no crit, enemy resistances,
+other chance-based procs, or the "Elemental"/multi-type conversion forms — good
+for comparing ranks/gear, not a true DPS. `--buffs` works as for `character`.
 
 More examples:
 

@@ -39,6 +39,7 @@ library
       GrimDawn.Report.Color
       GrimDawn.Report.Items
       GrimDawn.Report.Sets
+      GrimDawn.Report.Stats
       GrimDawn.Stash
   other-modules:
       Paths_gd_explorer
@@ -109,6 +110,7 @@ test-suite gd-explorer-test
       GrimDawn.Report.CharacterSpec
       GrimDawn.Report.ItemsSpec
       GrimDawn.Report.SetsSpec
+      GrimDawn.Report.StatsSpec
       GrimDawn.StashSpec
       TestHelpers
       Paths_gd_explorer

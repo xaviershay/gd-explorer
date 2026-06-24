@@ -70,6 +70,9 @@ char =
         , mkSkill "records/skills/devotion/tier1_19a.dbr" 1
         , mkSkill "records/skills/devotion/tier1_19e_skill.dbr" 1
         ]
+    , charPhysique = 0
+    , charCunning = 0
+    , charSpirit = 0
     }
 
 spec :: Spec

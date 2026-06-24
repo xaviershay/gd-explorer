@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # fetch-gd-data.sh — find Grim Dawn data on a Windows machine (run under WSL)
-# and rsync the subset gd-explorer needs into a `data/gd` layout on another host.
+# and rsync the subset gd-explorer needs into a `data/gd-data` layout on another host.
 #
 # It searches every mounted Windows drive (/mnt/c, /mnt/e, ...) for:
 #   * the game install (database.arz + Text_EN.arc + gdx1/gdx2/gdx3 DLC)
@@ -12,7 +12,7 @@
 # rsyncs the staging dir to your destination.
 #
 # Usage:
-#   ./fetch-gd-data.sh [user@host:/path/to/gd-explorer/data/gd]
+#   ./fetch-gd-data.sh [user@host:/path/to/gd-explorer/data/gd-data]
 #
 #   - With a destination: stages locally, then rsyncs to it.
 #   - Without a destination: stages locally only and prints the path so you can
@@ -212,5 +212,5 @@ if [ -n "$DEST" ]; then
 else
   echo
   log "Staged locally. To finish, rsync it to your Linux box, e.g.:"
-  echo "      rsync -av '$STAGING/' user@host:/var/home/xavier/code/gd-explorer/data/gd/"
+  echo "      rsync -av '$STAGING/' user@host:/var/home/xavier/code/gd-explorer/data/gd-data/"
 fi

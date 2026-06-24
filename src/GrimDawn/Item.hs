@@ -18,6 +18,15 @@ module GrimDawn.Item
   , damageBonuses
   , characterBonuses
   , skillBonuses
+    -- * Aggregation helpers (re-used by stat totals)
+  , sumField
+  , sumRange
+  , resistFieldMap
+  , effectName
+  , effectDisplay
+  , damageElems
+  , dotElems
+  , resolveSetTier
     -- * Attribute vocabularies
   , resistTypes
   , damageTypes
@@ -301,6 +310,16 @@ sumRange related prefixes stem = (sum (map fst pairs), sum (map snd pairs))
             mx = fieldNum (p <> stem <> "Max") r
       , isJust mn || isJust mx
       ]
+
+-- | Collapse a set record's array bonus fields to the value for the given
+-- equipped-piece count (set arrays are indexed by pieces-1; scalars and string
+-- fields pass through unchanged).
+resolveSetTier :: Int -> Record -> Record
+resolveSetTier cnt = HM.map pick
+  where
+    idx = max 0 (cnt - 1)
+    pick (VList xs) | not (null xs) = xs !! min idx (length xs - 1)
+    pick v = v
 
 -- render a damage range, collapsing to a single number when min == max.
 showRange :: Double -> Double -> Text
