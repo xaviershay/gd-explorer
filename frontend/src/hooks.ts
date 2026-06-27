@@ -34,3 +34,27 @@ export function useAsync<T>(fn: () => Promise<T>, key: string): AsyncState<T> {
   }, [key]);
   return state;
 }
+
+// Like useAsync, but keeps the previous data visible while a new key loads
+// (so live recomputes don't blank the screen). `loading` flags the refetch.
+export function useAsyncKeep<T>(
+  fn: () => Promise<T>,
+  key: string,
+): { data?: T; loading: boolean; error?: string } {
+  const [data, setData] = useState<T>();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setError(undefined);
+    fn()
+      .then((d) => alive && (setData(d), setLoading(false)))
+      .catch((e) => alive && (setError(String(e)), setLoading(false)));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return { data, loading, error };
+}

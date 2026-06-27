@@ -20,7 +20,8 @@ export function App() {
 function renderRoute(route: string) {
   const charMatch = route.match(/^\/characters\/(.+)$/);
   if (charMatch) {
-    return <CharacterDetailView name={decodeURIComponent(charMatch[1])} />;
+    const name = decodeURIComponent(charMatch[1]);
+    return <CharacterDetailView key={name} name={name} />;
   }
   if (route.startsWith("/characters")) return <CharactersView />;
   return <SetsView />;

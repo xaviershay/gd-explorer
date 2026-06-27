@@ -107,6 +107,10 @@ orElse :: Maybe a -> Maybe a -> Maybe a
 orElse (Just x) _ = Just x
 orElse Nothing y = y
 
+-- | The first 'Just' in a list, or 'Nothing'.
+firstJust :: [Maybe a] -> Maybe a
+firstJust = foldr orElse Nothing
+
 -- | True when any related record carries an @itemSetName@ field.
 isSetItem :: Item -> GameDb -> Bool
 isSetItem it db = any (HM.member "itemSetName" . snd) (relatedRecords it db)
@@ -654,7 +658,7 @@ itemAttrs it db =
     , iaSkillBonuses = skillBonuses db related
     , iaIsSet = any (HM.member "itemSetName" . snd) related
     , iaSetRecord = setRecordName it db
-    , iaBitmap = base >>= \b -> maybe (textField "artifactBitmap" b) Just (textField "bitmap" b)
+    , iaBitmap = base >>= \b -> firstJust [textField f b | f <- ["bitmap", "artifactBitmap", "relicBitmap"]]
     }
   where
     related = relatedRecords it db

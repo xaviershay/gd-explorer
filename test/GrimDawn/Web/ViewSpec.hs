@@ -83,7 +83,7 @@ spec = do
       ("svOwnedCount" `isInfixOf` s) `shouldBe` False
 
   describe "detailView" $ do
-    let dv = detailView synthDb hero
+    let dv = detailView synthDb [] hero
     it "carries character header and equipped gear" $ do
       cdvName dv `shouldBe` "Hero"
       cdvLevel dv `shouldBe` 50

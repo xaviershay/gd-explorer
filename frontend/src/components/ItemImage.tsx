@@ -16,6 +16,7 @@ export function ItemImage({ record }: { record: string }) {
       className="pin-image"
       src={`/api/item-image/${encodeURIComponent(record)}`}
       alt=""
+      loading="lazy"
       onError={() => setFailed(true)}
     />
   );

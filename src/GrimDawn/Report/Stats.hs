@@ -26,6 +26,10 @@ module GrimDawn.Report.Stats
   , UpgradeRow (..)
   , findUpgrades
   , renderUpgradeRow
+  , ScoreBase
+  , mkScoreBase
+  , scoreItems
+  , defaultUpgradeTarget
     -- * Attack DPS estimate
   , assumedBaseAttackSpeed
   , AttackKind (..)
@@ -379,6 +383,7 @@ data StatSummary = StatSummary
   { ssResists :: ![(Text, Double, Double, Double)]
   , ssAttributes :: ![(Text, Double)]
   , ssKeyTotals :: ![(Text, Double, Double)]
+  , ssDamage :: ![Text] -- total damage bonuses (e.g. "+120% Acid"), gear + buffs
   }
   deriving (Show, Eq)
 
@@ -393,6 +398,7 @@ statSummary diff c sources =
     , ssKeyTotals =
         [ row | row@(label, _, _) <- keyTotalsOf sources, label `notElem` ["Physique", "Cunning", "Spirit"]
         ]
+    , ssDamage = damageBonuses sources
     }
 
 --------------------------------------------------------------------------------
@@ -634,6 +640,78 @@ data UpgradeRow = UpgradeRow
   }
   deriving (Show, Eq)
 
+-- | The conventional resistance target the upgrade search aims for (just below
+-- the standard 80% cap so any shortfall is penalised).
+defaultUpgradeTarget :: Double
+defaultUpgradeTarget = 80
+
+-- | Precomputed baseline against which alternative gear lists can be scored
+-- cheaply, sharing the cost of the (relatively expensive) resist/key-total/DPS
+-- evaluation of the base build. Build it once with 'mkScoreBase' and reuse for
+-- many candidate overlays via 'scoreItems'.
+data ScoreBase = ScoreBase
+  { sbWeights :: !Weights
+  , sbTarget :: !Double
+  , sbDiff :: !Difficulty
+  , sbDb :: !GameDb
+  , sbChar :: !Character
+  , sbExtra :: ![(Text, Record)] -- non-gear sources (devotions, mastery, buffs)
+  , sbBaseResists :: ![(Text, Double, Double, Double)]
+  , sbBaseKeyTotals :: ![(Text, Double, Double)]
+  , sbBaseDps :: !Double
+  }
+
+-- | Precompute the baseline stats for an equipped gear list so candidate
+-- overlays can be scored without redoing the base work each time.
+mkScoreBase
+  :: Weights -> Double -> Difficulty -> Character -> [(Text, Record)] -> GameDb -> [Item] -> ScoreBase
+mkScoreBase w target diff c extra db base =
+  let srcBase = statSources db base ++ extra
+   in ScoreBase
+        { sbWeights = w
+        , sbTarget = target
+        , sbDiff = diff
+        , sbDb = db
+        , sbChar = c
+        , sbExtra = extra
+        , sbBaseResists = resistRows diff srcBase
+        , sbBaseKeyTotals = keyTotalsOf srcBase
+        , sbBaseDps = estTotalDpsOf db c srcBase
+        }
+
+-- | The single number we treat as "damage" for upgrade scoring: the highest
+-- active attack's DPS plus every always-on proc folded in (procs fire while
+-- you attack), so its delta approximates the real change to sustained output.
+estTotalDpsOf :: GameDb -> Character -> [(Text, Record)] -> Double
+estTotalDpsOf db c src =
+  let rows = attackDps db src c
+      actives = filter ((== Active) . adKind) rows
+      best = if null actives then 0 else maximum (map adDps actives)
+   in best + sum [adDps r | r <- rows, adKind r == Triggered]
+
+-- | Score an arbitrary alternative gear list against a precomputed baseline,
+-- returning @(score, resist-changes, oa-delta, da-delta, dps-delta)@. The score
+-- combines the weighted resist shortfall reduction with the OA/DA/DPS deltas.
+scoreItems
+  :: ScoreBase
+  -> [Item]
+  -> (Double, [(Text, Double, Double)], Double, Double, Double)
+scoreItems sb over =
+  let srcO = statSources (sbDb sb) over ++ sbExtra sb
+      rO = resistRows (sbDiff sb) srcO
+      kO = keyTotalsOf srcO
+      pen x = let d = sbTarget sb - x in if d > 0 then d * d else 0
+      paired = zip (sbBaseResists sb) rO
+      changes = [(n, b, a) | ((n, b, _, _), (_, a, _, _)) <- paired, b /= a]
+      resScore = sum [pen b - pen a | ((_, b, _, _), (_, a, _, _)) <- paired]
+      flatOf l ks = case [f | (lab, f, _) <- ks, lab == l] of (x : _) -> x; [] -> 0
+      oaD = flatOf "Offensive Ability" kO - flatOf "Offensive Ability" (sbBaseKeyTotals sb)
+      daD = flatOf "Defensive Ability" kO - flatOf "Defensive Ability" (sbBaseKeyTotals sb)
+      dpsD = estTotalDpsOf (sbDb sb) (sbChar sb) srcO - sbBaseDps sb
+      w = sbWeights sb
+      sc = wResist w * resScore + wOa w * oaD + wDa w * daD + wDamage w * dpsD
+   in (sc, changes, oaD, daD, dpsD)
+
 -- | Score each candidate as an overlay onto @base@, keeping net-positive results
 -- best-first. Resistances use the non-linear squared-shortfall-below-@target@
 -- weighting; OA/DA/damage use their deltas. @extra@ is the non-gear sources
@@ -644,33 +722,11 @@ findUpgrades :: Weights -> Double -> Difficulty -> Int -> Character -> [(Text, R
 findUpgrades w target diff slotOcc c extra db base candidates =
   sortOn (negate . urScore) [r | (loc, cand) <- candidates, let r = scoreOne loc cand, urScore r > 0]
   where
-    srcBase = statSources db base ++ extra
-    rB = resistRows diff srcBase
-    kB = keyTotalsOf srcBase
-    dpsB = estTotalDps srcBase
-    pen x = let d = target - x in if d > 0 then d * d else 0
-    flatOf l ks = case [f | (lab, f, _) <- ks, lab == l] of (x : _) -> x; [] -> 0
-    -- the single number we treat as "damage": the highest active attack's DPS with
-    -- every proc folded in (procs fire automatically while you attack), so the
-    -- delta approximates the real change to sustained output.
-    estTotalDps src =
-      let rows = attackDps db src c
-          actives = filter ((== Active) . adKind) rows
-          best = if null actives then 0 else maximum (map adDps actives)
-       in best + sum [adDps r | r <- rows, adKind r == Triggered]
+    sb = mkScoreBase w target diff c extra db base
     scoreOne loc cand =
       let over = overlayAt db slotOcc base cand
-          srcO = statSources db over ++ extra
-          rO = resistRows diff srcO
-          kO = keyTotalsOf srcO
-          paired = zip rB rO
-          changes = [(n, b, a) | ((n, b, _, _), (_, a, _, _)) <- paired, b /= a]
-          resScore = sum [pen b - pen a | ((_, b, _, _), (_, a, _, _)) <- paired]
-          oaD = flatOf "Offensive Ability" kO - flatOf "Offensive Ability" kB
-          daD = flatOf "Defensive Ability" kO - flatOf "Defensive Ability" kB
-          dpsD = estTotalDps srcO - dpsB
+          (sc, changes, oaD, daD, dpsD) = scoreItems sb over
           attrs = itemAttrs cand db
-          sc = wResist w * resScore + wOa w * oaD + wDa w * daD + wDamage w * dpsD
        in UpgradeRow sc (iaDisplayName attrs) loc (iaLevelRequirement attrs) changes oaD daD dpsD cand
 
 -- | Render one upgrade row: a header line naming the item and where it is, then
@@ -857,8 +913,11 @@ attackDps db sources c =
           flatOf stem =
             let (lo, hi) = sumRange sources ["offensive", "offensiveBase", "offensiveBonus"] stem
                 wflat = (lo + hi) / 2
+                -- Retaliation added to attack is a flat per-hit addition (like a
+                -- skill's own flat), NOT part of the weapon-scaled damage, so it
+                -- is added outside the weapon% multiplier.
                 rdaFlat = retalTotalOf stem * rdaPct / 100
-             in (wflat + rdaFlat) * wpnPct / 100 + sflat stem
+             in wflat * wpnPct / 100 + rdaFlat + sflat stem
           flat0 = HM.fromList [(stem, flatOf stem) | (stem, _) <- damageElems]
           skillConv = concatMap (recordConversions . snd) sibs
           flat = applyConversions (globalConv ++ skillConv) flat0

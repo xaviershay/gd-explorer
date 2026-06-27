@@ -2,7 +2,8 @@ import { useState } from "react";
 import { getSets, BonusGroups, SetView, SetMember } from "../api";
 import { useAsync } from "../hooks";
 import { rarityColor } from "../colors";
-import { BonusItem, orderedResists, ResistEntry, ResistRow } from "../elements";
+import { BonusItem, orderedResists } from "../elements";
+import { BonusSource, groupBonuses, GroupedStats } from "../bonuses";
 import { ItemAttributes } from "../components/ItemAttributes";
 import { ItemImage } from "../components/ItemImage";
 
@@ -149,8 +150,16 @@ function ItemSquare({ member: m }: { member: SetMember }) {
 // The preview panel for the selected set: the combined totals of wearing the
 // whole set, then each piece in game-style detail.
 function SetPreview({ set }: { set: SetView }) {
-  const { resists, groups } = setTotals(set);
-  const hasTotals = resists.length > 0 || GROUP_ORDER.some((g) => groups[g].length > 0);
+  // Each piece's own stats plus the set bonuses it unlocks. Set bonuses are
+  // per-tier deltas, so summing every piece counts the full set bonus exactly
+  // once (no double counting).
+  const sources: BonusSource[] = set.members.map((m) => ({
+    resistBonuses: [...m.gear.resistBonuses, ...m.setBonus.resistBonuses],
+    damageBonuses: [...m.gear.damageBonuses, ...m.setBonus.damageBonuses],
+    bonuses: [...m.gear.bonuses, ...m.setBonus.bonuses],
+    skillBonuses: [...m.gear.skillBonuses, ...m.setBonus.skillBonuses],
+  }));
+  const { resists, groups } = groupBonuses(sources);
   return (
     <div className="preview">
       <div className="preview-head">
@@ -162,22 +171,10 @@ function SetPreview({ set }: { set: SetView }) {
         </span>
       </div>
 
-      {hasTotals && (
-        <div className="set-totals">
-          <div className="set-totals-head">Combined set totals</div>
-          {resists.length > 0 && <ResistRow entries={resists} />}
-          {GROUP_ORDER.filter((g) => groups[g].length > 0).map((g) => (
-            <div className="total-group" key={g}>
-              <div className="total-group-head">{GROUP_LABEL[g]}</div>
-              <ul className="ia-lines">
-                {groups[g].map((t, i) => (
-                  <BonusItem key={i} line={t} />
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="set-totals">
+        <div className="set-totals-head">Combined set totals</div>
+        <GroupedStats resists={orderedResists(resists)} groups={groups} />
+      </div>
 
       <div className="preview-items">
         {set.members.map((m) => {
@@ -208,155 +205,7 @@ function SetPreview({ set }: { set: SetView }) {
   );
 }
 
-// --- Compound totals -------------------------------------------------------
-
-// A line parsed into a number (or numeric range) + a label.
-interface Stat {
-  lo: number;
-  hi: number;
-  percent: boolean;
-  label: string;
-  range: boolean;
-  inc: boolean; // "Increases <label> by N%" form
-}
-
-type Group = "skills" | "stats" | "combat" | "other";
-const GROUP_ORDER: Group[] = ["skills", "stats", "combat", "other"];
-const GROUP_LABEL: Record<Group, string> = {
-  skills: "Skills",
-  stats: "Stats",
-  combat: "Combat",
-  other: "Other",
-};
-
-// "<N>% <Type>" — resistance lines (same shape as % damage, so they must be
-// read only from the resistBonuses arrays, never merged with damage by label).
-const RESIST_RE = /^\+?\s*(-?\d+(?:\.\d+)?)\s*%?\s+(.*\S)\s*$/;
-// "+12-22 Cold", "+16% Health", "+3 to all Skills".
-const NUM_RE = /^\+?\s*(-?\d+(?:\.\d+)?)(?:\s*-\s*(\d+(?:\.\d+)?))?\s*(%)?\s+(.*\S)\s*$/;
-// "Increases Armor by 8%", "Increases Energy Regeneration by 76%".
-const INC_RE = /^Increases\s+(.*\S)\s+by\s+(\d+(?:\.\d+)?)%$/i;
-
-// The effect of wearing the whole set: each piece's own stats plus the set
-// bonuses it unlocks. Set bonuses are per-tier deltas, so summing every piece's
-// counts the full set bonus exactly once (no double counting). Resistances are
-// summed per type for the icon row; everything else is grouped and summed.
-function setTotals(set: SetView): {
-  resists: ResistEntry[];
-  groups: Record<Group, string[]>;
-} {
-  const rsum = new Map<string, number>();
-  const byGroup: Record<Group, string[]> = { skills: [], stats: [], combat: [], other: [] };
-
-  const addResists = (lines: string[]) => {
-    for (const line of lines) {
-      const r = RESIST_RE.exec(line.trim());
-      if (!r) continue;
-      rsum.set(r[2], (rsum.get(r[2]) ?? 0) + parseFloat(r[1]));
-    }
-  };
-
-  for (const m of set.members) {
-    addResists(m.gear.resistBonuses);
-    addResists(m.setBonus.resistBonuses);
-    // Damage is combat; skills are skills; character bonuses are classified.
-    byGroup.combat.push(...m.gear.damageBonuses, ...m.setBonus.damageBonuses);
-    byGroup.skills.push(...m.gear.skillBonuses, ...m.setBonus.skillBonuses);
-    for (const line of [...m.gear.bonuses, ...m.setBonus.bonuses]) {
-      byGroup[classifyBonus(line)].push(line);
-    }
-  }
-
-  // Always show every canonical resistance slot (0% when absent).
-  const resists = orderedResists([...rsum.entries()].map(([label, value]) => ({ label, value })));
-  const groups = { skills: [], stats: [], combat: [], other: [] } as Record<Group, string[]>;
-  for (const g of GROUP_ORDER) groups[g] = aggregate(byGroup[g]);
-  return { resists, groups };
-}
-
-// Classify a character bonus (the "bonuses" array) into a display group.
-function classifyBonus(line: string): Group {
-  const t = line.toLowerCase();
-  if (/^grants /.test(t)) return "skills";
-  if (/offensive ability|defensive ability|retaliation|armor piercing|\bcrit/.test(t))
-    return "combat";
-  if (/health|energy|physique|cunning|spirit|armor|regenerat|absorption|constitution/.test(t))
-    return "stats";
-  return "other";
-}
-
 // Flatten a set-bonus group into one ordered list for the per-piece display.
 function flattenBonus(b: BonusGroups): string[] {
   return [...b.resistBonuses, ...b.damageBonuses, ...b.bonuses, ...b.skillBonuses];
-}
-
-// Sum numeric bonus lines by stat; pass through anything unparseable (deduped).
-function aggregate(lines: string[]): string[] {
-  const stats = new Map<string, Stat>();
-  const other = new Map<string, number>();
-  for (const raw of lines) {
-    const line = raw.trim();
-    const inc = INC_RE.exec(line);
-    if (inc) {
-      const label = inc[1];
-      const v = parseFloat(inc[2]);
-      bump(stats, "inc:" + label, () => ({
-        lo: v,
-        hi: v,
-        percent: true,
-        label,
-        range: false,
-        inc: true,
-      }))((s) => {
-        s.lo += v;
-        s.hi += v;
-      });
-      continue;
-    }
-    const m = NUM_RE.exec(line);
-    if (!m) {
-      other.set(line, (other.get(line) ?? 0) + 1);
-      continue;
-    }
-    const lo = parseFloat(m[1]);
-    const hi = m[2] !== undefined ? parseFloat(m[2]) : lo;
-    const percent = m[3] === "%";
-    const label = m[4];
-    bump(stats, (percent ? "%" : "") + label, () => ({
-      lo,
-      hi,
-      percent,
-      label,
-      range: m[2] !== undefined,
-      inc: false,
-    }))((s) => {
-      s.lo += lo;
-      s.hi += hi;
-      s.range = s.range || m[2] !== undefined;
-    });
-  }
-
-  const out = [...stats.values()]
-    .sort((a, b) => a.label.localeCompare(b.label))
-    .map(fmtStat);
-  for (const [line, n] of other) out.push(n > 1 ? `${line} ×${n}` : line);
-  return out;
-}
-
-// Insert-or-update helper: returns a function that applies `update` to an
-// existing entry, or seeds a new one from `create`.
-function bump<T>(map: Map<string, T>, key: string, create: () => T) {
-  return (update: (cur: T) => void) => {
-    const cur = map.get(key);
-    if (cur) update(cur);
-    else map.set(key, create());
-  };
-}
-
-const fmtNum = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
-
-function fmtStat(s: Stat): string {
-  const val = s.range && s.lo !== s.hi ? `${fmtNum(s.lo)}-${fmtNum(s.hi)}` : fmtNum(s.lo);
-  if (s.inc) return `Increases ${s.label} by ${val}%`;
-  return `+${val}${s.percent ? "%" : ""} ${s.label}`;
 }

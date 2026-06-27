@@ -17,12 +17,14 @@ import qualified Data.ByteString.Lazy as BL
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
-import Data.List (find)
+import Data.List (find, nub)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import Network.HTTP.Types (status200, status404, status500)
-import Network.Wai (Application, Middleware, pathInfo, responseFile, responseLBS)
+import Network.Wai (Application, Middleware, pathInfo, queryString, responseFile, responseLBS)
+import qualified Data.Text.Encoding as TE
+import Text.Read (readMaybe)
 import Network.Wai.Application.Static (defaultWebAppSettings, staticApp)
 import System.Directory (doesDirectoryExist, doesFileExist)
 import System.Exit (exitFailure)
@@ -37,7 +39,7 @@ import GrimDawn.Db (GameDb, loadGameDb)
 import GrimDawn.Gdc (Character (..), itemWithName)
 import GrimDawn.Item (iaBitmap, itemAttrs)
 import GrimDawn.Web.Texture (decodeTexture)
-import GrimDawn.Web.View (detailView, setsView, summaryView)
+import GrimDawn.Web.View (GearOverride (..), detailView, enhancementCatalog, rankEnhancements, setsView, summaryView)
 
 data ServeOpts = ServeOpts
   { soPort :: !Int
@@ -78,11 +80,31 @@ routes db texCache opts = do
     chars <- loadOr (loadCharacters (soDataDir opts))
     json (map (summaryView db) chars)
 
+  -- The attachable components/augments, for the gear configuration selectors.
+  get "/api/enhancements" $ json (enhancementCatalog db)
+
   get "/api/characters/:name" $ do
     name <- pathParam "name"
+    overrides <- parseOverrides . queryString <$> request
     chars <- loadOr (loadCharacters (soDataDir opts))
     case findChar name chars of
-      Just c -> json (detailView db c)
+      Just c -> json (detailView db overrides c)
+      Nothing -> do
+        status status404
+        text ("no character named " <> TL.fromStrict name)
+
+  -- Rank components/augments compatible with a gear slot by the same scoring
+  -- algorithm as the `upgrades` CLI, holding the rest of the (override-adjusted)
+  -- build constant. Returns record names in best-first order. Fetched on demand
+  -- by the picker UI to sort options.
+  get "/api/characters/:name/rank" $ do
+    name <- pathParam "name"
+    slot <- queryParam "slot"
+    kind <- queryParam "kind"
+    overrides <- parseOverrides . queryString <$> request
+    chars <- loadOr (loadCharacters (soDataDir opts))
+    case findChar name chars of
+      Just c -> json (rankEnhancements db overrides slot kind c)
       Nothing -> do
         status status404
         text ("no character named " <> TL.fromStrict name)
@@ -117,6 +139,23 @@ loadOr act = do
 -- | Match a character by name, case-insensitively (mirrors @Cli.findChar@).
 findChar :: Text -> [Character] -> Maybe Character
 findChar name = find ((== T.toLower name) . T.toLower . charName)
+
+-- | Parse @comp.<i>@ / @aug.<i>@ query params into per-slot gear overrides. A
+-- value of @none@ clears the slot; any other value sets that component/augment
+-- record; an absent param leaves the slot's original attachment in place.
+parseOverrides :: [(BS.ByteString, Maybe BS.ByteString)] -> [GearOverride]
+parseOverrides qs =
+  [GearOverride i (lookup i comps) (lookup i augs) | i <- nub (map fst comps ++ map fst augs)]
+  where
+    decoded = [(TE.decodeUtf8 k, maybe "" TE.decodeUtf8 v) | (k, v) <- qs]
+    pick pre =
+      [ (i, if v == "none" then "" else v)
+      | (k, v) <- decoded
+      , Just rest <- [T.stripPrefix pre k]
+      , Just i <- [readMaybe (T.unpack rest)]
+      ]
+    comps = pick "comp."
+    augs = pick "aug."
 
 -- | Normalise an item's @bitmap@ path to its archive key. Records reference
 -- textures as @items/<...>.tex@, but @Items.arc@ stores them without the leading

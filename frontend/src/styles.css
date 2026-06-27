@@ -276,6 +276,11 @@ h1 {
   gap: 6px 10px;
   margin: 4px 0 10px;
 }
+.resist-row.inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
 .resist-chip {
   display: inline-flex;
   align-items: center;
@@ -327,6 +332,68 @@ h1 {
   background: #3a2330;
   color: #ff9eb5;
   margin-left: 6px;
+}
+
+/* Floating compact summary, pinned to the top while scrolling */
+.sticky-summary {
+  position: sticky;
+  top: 48px;
+  z-index: 30;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.35);
+  margin: 0 -20px 16px;
+  padding: 8px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sticky-damage {
+  display: flex;
+  gap: 2px 12px;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  padding-bottom: 2px;
+}
+.sticky-damage .dtype {
+  flex: 0 0 auto;
+}
+
+/* Shopping list */
+.shopping {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 8px;
+}
+.shop-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 8px;
+}
+.shop-item .pin-image {
+  width: 32px;
+  height: 32px;
+  font-size: 14px;
+  flex: 0 0 auto;
+}
+.shop-body {
+  min-width: 0;
+}
+.shop-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+.shop-meta {
+  font-size: 12px;
 }
 
 /* Character summary */
@@ -433,53 +500,265 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
-/* Equipment paper-doll grid */
-.equip-grid {
+/* Equipment paper-doll: rings/head/amulet row, weapons+armour columns, then a
+   relic/waist/medal row. */
+.equip-row {
+  display: grid;
+  gap: 10px;
+  align-items: start;
+  margin-bottom: 10px;
+}
+.equip-row-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+.equip-row-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+.equip-body-mid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  grid-template-areas:
-    "head amulet"
-    "shoulders medal"
-    "chest ring1"
-    "hands ring2"
-    "legs relic"
-    "waist weapon1"
-    "feet weapon2";
-  gap: 8px;
-  max-width: 680px;
-  margin-bottom: 18px;
+  gap: 10px;
+  align-items: start;
+  margin-bottom: 10px;
 }
-.equip-slot {
+.equip-col {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.equip-card {
+  display: flex;
+  gap: 10px;
   border: 1px solid var(--border);
   background: var(--panel);
   border-radius: 8px;
-  padding: 6px 8px;
-  min-height: 60px;
+  padding: 10px;
 }
-.equip-info {
-  min-width: 0;
+.equip-extras {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
 }
-.equip-name {
-  font-weight: 600;
-  font-size: 13px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.equip-meta {
-  font-size: 11px;
-}
-.equip-slot .pin-image {
-  width: 44px;
-  height: 44px;
+.equip-extras .equip-card {
+  flex: 1 1 280px;
 }
 .equip-empty {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 16px 10px;
+  text-align: center;
+  color: var(--muted);
   font-size: 12px;
   font-style: italic;
+  opacity: 0.45;
+}
+@media (max-width: 900px) {
+  .equip-row-4,
+  .equip-row-3,
+  .equip-body-mid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Component / augment pickers on a gear card */
+.enh-controls {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.enh-picker {
+  position: relative;
+}
+.enh-triggerline {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+.enh-remove {
+  flex: 0 0 auto;
+  width: 26px;
+  background: #20242c;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+.enh-remove:hover {
+  color: #ff8888;
+  border-color: #5a3a3a;
+}
+.enh-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: #20242c;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.enh-trigger:hover {
+  border-color: #3f4654;
+}
+.enh-trigger .pin-image {
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+  border-radius: 4px;
+}
+.enh-trigger-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.enh-trigger-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.enh-caret {
+  flex: 0 0 auto;
+}
+.enh-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  margin: 3px 0 0 30px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Picker popover */
+.enh-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  width: max(100%, 300px);
+  background: var(--panel);
+  border: 1px solid #3f4654;
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+  padding: 8px;
+}
+.enh-search {
+  width: 100%;
+  background: #14161a;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.enh-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.enh-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  background: #14161a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
   opacity: 0.5;
+}
+.enh-chip.on,
+.enh-chip:hover {
+  opacity: 1;
+  border-color: currentColor;
+}
+.enh-options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.enh-option {
+  display: flex;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.enh-option:hover {
+  background: #262b34;
+}
+.enh-option.selected {
+  outline: 1px solid #7fb3ff;
+}
+.enh-option.none {
+  color: var(--muted);
+  font-style: italic;
+}
+.enh-option .pin-image {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+.enh-option-body {
+  min-width: 0;
+}
+.enh-option-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.enh-option-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px 10px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.max-level {
+  margin-left: 16px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: middle;
+}
+.max-level input {
+  width: 64px;
+  background: #20242c;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 13px;
+}
+.reset-overrides {
+  margin-left: 12px;
+  font-size: 12px;
+  vertical-align: middle;
+}
+.updating {
+  font-size: 13px;
+  font-weight: 400;
 }
 
 /* Gear list */

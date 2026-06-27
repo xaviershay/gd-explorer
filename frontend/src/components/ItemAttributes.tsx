@@ -1,16 +1,12 @@
 import { Gear } from "../api";
 import { rarityColor } from "../colors";
-import { BonusItem } from "../elements";
+import { groupBonuses, GroupedStats } from "../bonuses";
 
 // In-game-style item attribute block: rarity-coloured name, a type/level meta
-// line, then all stat bonuses. Reused by the character detail and pinned bar.
+// line, then stats grouped (resistance icons + Skills/Stats/Combat/Other) the
+// same way as the set view. Reused by the set preview and the character sheet.
 export function ItemAttributes({ gear, name }: { gear: Gear; name?: string }) {
-  const lines = [
-    ...gear.resistBonuses,
-    ...gear.damageBonuses,
-    ...gear.bonuses,
-    ...gear.skillBonuses,
-  ];
+  const { resists, groups } = groupBonuses([gear]);
   const meta = [
     gear.type,
     gear.classification,
@@ -24,13 +20,7 @@ export function ItemAttributes({ gear, name }: { gear: Gear; name?: string }) {
         {name ?? gear.name}
       </div>
       {meta && <div className="ia-meta muted">{meta}</div>}
-      {lines.length > 0 && (
-        <ul className="ia-lines">
-          {lines.map((l, i) => (
-            <BonusItem key={i} line={l} />
-          ))}
-        </ul>
-      )}
+      <GroupedStats resists={resists} groups={groups} inlineResists />
     </div>
   );
 }

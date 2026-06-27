@@ -172,10 +172,11 @@ export function orderedResists(entries: ResistEntry[]): ResistEntry[] {
 }
 
 // The in-game-style resistance grid: an icon + value per type in fixed columns.
-// Pass entries already ordered (see `orderedResists`).
-export function ResistRow({ entries }: { entries: ResistEntry[] }) {
+// Pass entries already ordered (see `orderedResists`). `inline` switches to a
+// flowing chip layout for compact item cards.
+export function ResistRow({ entries, inline = false }: { entries: ResistEntry[]; inline?: boolean }) {
   return (
-    <div className="resist-row">
+    <div className={inline ? "resist-row inline" : "resist-row"}>
       {entries.map((r) => {
         const el = ELEMENT_BY_LABEL.get(r.label) ?? elementOf(r.label);
         const capNote =
