@@ -6,6 +6,7 @@
 module GrimDawn.Gdc
   ( Item (..)
   , emptyItemName
+  , itemWithName
   , Skill (..)
   , Character (..)
   , loadCharacter
@@ -45,6 +46,11 @@ data Item = Item
 -- | True when an item slot is empty (no basename).
 emptyItemName :: Item -> Bool
 emptyItemName = T.null . itemBaseName
+
+-- | A bare item carrying only a record basename (all other fields empty/default,
+-- stack count 1). Used for synthetic items such as craftable blueprint results.
+itemWithName :: Text -> Item
+itemWithName n = Item n "" "" "" "" 0 "" "" 0 "" 0 0 0 1
 
 -- | A learned skill (or devotion star) from block 8. Mirrors gd-edit's @Skill@
 -- struct. Class skills have @skName@ under @records/skills/<mastery>/@; devotion

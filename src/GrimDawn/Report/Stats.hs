@@ -14,26 +14,32 @@ module GrimDawn.Report.Stats
   , parseBuffs
   , skillSources
   , overlay
+  , overlayAt
   , renderStats
   , renderStatsDiff
+  , StatSummary (..)
+  , statSummary
     -- * Upgrade search
   , Weights (..)
   , defaultWeights
   , setWeight
   , UpgradeRow (..)
   , findUpgrades
-  , renderUpgrades
+  , renderUpgradeRow
     -- * Attack DPS estimate
   , assumedBaseAttackSpeed
+  , AttackKind (..)
   , AttackDps (..)
   , attackDps
+  , parseProcController
   , renderDps
   ) where
 
 import Data.Char (isDigit, isLower, toLower)
 import qualified Data.HashMap.Strict as HM
-import Data.List (nub, sortOn)
+import Data.List (intercalate, nub, nubBy, sortOn)
 import Data.Maybe (listToMaybe)
+import Text.Read (readMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import GrimDawn.Arz (Record, Value (..), lookupField, valueText)
@@ -290,9 +296,41 @@ overlay db = foldl swap
   where
     swap equipped cand =
       case break (\e -> slotType e == slotType cand) equipped of
-        (before, _old : after) -> before ++ cand : after
+        (before, old : after) -> before ++ inheritGear old cand : after
         (before, []) -> before ++ [cand]
     slotType it = iaType (itemAttrs it db)
+
+-- | Like 'overlay' for a single candidate, but replace the @n@-th (0-based)
+-- equipped item of the candidate's slot type rather than the first — so a specific
+-- ring slot can be targeted (ring1 = 0, ring2 = 1). If there are fewer than @n+1@
+-- equipped items of that type (e.g. an empty ring slot) the candidate fills the
+-- slot by being appended.
+overlayAt :: GameDb -> Int -> [Item] -> Item -> [Item]
+overlayAt db n equipped cand = go n equipped
+  where
+    ty = iaType (itemAttrs cand db)
+    sameSlot e = iaType (itemAttrs e db) == ty
+    go _ [] = [cand]
+    go k (e : es)
+      | sameSlot e = if k <= 0 then inheritGear e cand : es else e : go (k - 1) es
+      | otherwise = e : go k es
+
+-- | A candidate keeps its own component/augment where it has one, otherwise it
+-- inherits the replaced item's — so swapping a bare drop in keeps your sockets for
+-- a fair comparison (you'd move them over). Component fields (name, bonus, seed,
+-- completion) and augment fields (name, seed) move as a group.
+inheritGear :: Item -> Item -> Item
+inheritGear old cand =
+  let comp = if T.null (itemRelicName cand) then old else cand
+      aug = if T.null (itemAugmentName cand) then old else cand
+   in cand
+        { itemRelicName = itemRelicName comp
+        , itemRelicBonus = itemRelicBonus comp
+        , itemRelicSeed = itemRelicSeed comp
+        , itemRelicCompletionLevel = itemRelicCompletionLevel comp
+        , itemAugmentName = itemAugmentName aug
+        , itemAugmentSeed = itemAugmentSeed aug
+        }
 
 --------------------------------------------------------------------------------
 -- Resistances
@@ -325,6 +363,37 @@ resistRows diff sources =
         overcap = max 0 (afterPenalty - cap)
         name = effectDisplay ["defensive"] (resistToken ty)
   ]
+
+-- | The three primary attributes as @(label, bio base, flat field, % field)@.
+attrFieldsOf :: Character -> [(Text, Double, Text, Text)]
+attrFieldsOf c =
+  [ ("Physique", charPhysique c, "characterStrength", "characterStrengthModifier")
+  , ("Cunning", charCunning c, "characterDexterity", "characterDexterityModifier")
+  , ("Spirit", charSpirit c, "characterIntelligence", "characterIntelligenceModifier")
+  ]
+
+-- | The structured stats summary behind 'renderStats': effective resistances
+-- (name, %, cap, overcap), absolute attributes, and the key offensive/defensive
+-- totals (label, flat, %). @sources@ must already include gear + buffs.
+data StatSummary = StatSummary
+  { ssResists :: ![(Text, Double, Double, Double)]
+  , ssAttributes :: ![(Text, Double)]
+  , ssKeyTotals :: ![(Text, Double, Double)]
+  }
+  deriving (Show, Eq)
+
+statSummary :: Difficulty -> Character -> [(Text, Record)] -> StatSummary
+statSummary diff c sources =
+  StatSummary
+    { ssResists = resistRows diff sources
+    , ssAttributes =
+        [ (label, (baseV + sumField sources flatField) * (1 + sumField sources pctField / 100))
+        | (label, baseV, flatField, pctField) <- attrFieldsOf c
+        ]
+    , ssKeyTotals =
+        [ row | row@(label, _, _) <- keyTotalsOf sources, label `notElem` ["Physique", "Cunning", "Spirit"]
+        ]
+    }
 
 --------------------------------------------------------------------------------
 -- Rendering
@@ -375,11 +444,7 @@ renderStats useColor diff c extra db items =
             pct = sumField sources pctField
             total = (baseV + flat) * (1 + pct / 100)
       ]
-    attrFields =
-      [ ("Physique", charPhysique c, "characterStrength", "characterStrengthModifier")
-      , ("Cunning", charCunning c, "characterDexterity", "characterDexterityModifier")
-      , ("Spirit", charSpirit c, "characterIntelligence", "characterIntelligenceModifier")
-      ]
+    attrFields = attrFieldsOf c
 
     -- key flat (+ %) contributions, excluding the attributes shown above
     keyTotals =
@@ -540,9 +605,12 @@ data Weights = Weights
   deriving (Show, Eq)
 
 -- | Defaults chosen to balance the components' natural scales (resist score is a
--- squared-shortfall in the thousands; OA/DA/damage deltas are tens to hundreds).
+-- squared-shortfall in the thousands; OA/DA deltas are tens to hundreds; the
+-- damage delta is a raw DPS change, often hundreds to thousands). Survivability
+-- (resistances + defensive ability) is weighted well above raw damage, so a piece
+-- that shores up a resist or DA hole beats one that only adds offence.
 defaultWeights :: Weights
-defaultWeights = Weights {wResist = 1, wOa = 50, wDa = 50, wDamage = 25}
+defaultWeights = Weights {wResist = 2, wOa = 30, wDa = 80, wDamage = 1}
 
 -- | Set one weight by category name (resist|oa|da|damage); unknown names are ignored.
 setWeight :: Text -> Double -> Weights -> Weights
@@ -556,30 +624,42 @@ setWeight cat v w = case cat of
 data UpgradeRow = UpgradeRow
   { urScore :: !Double
   , urName :: !Text
+  , urLocation :: !Text -- where the candidate is (e.g. "shared stash")
   , urLevel :: !(Maybe Int)
   , urResists :: ![(Text, Double, Double)] -- (type, before, after), changed only
   , urOa :: !Double
   , urDa :: !Double
-  , urDamage :: !Double
+  , urDpsDelta :: !Double -- approx change to best-attack-plus-procs DPS
+  , urItem :: !Item -- the candidate (for overlaying, e.g. its DPS)
   }
   deriving (Show, Eq)
 
 -- | Score each candidate as an overlay onto @base@, keeping net-positive results
 -- best-first. Resistances use the non-linear squared-shortfall-below-@target@
 -- weighting; OA/DA/damage use their deltas. @extra@ is the non-gear sources
--- (devotions, mastery, skill buffs), held constant across candidates.
-findUpgrades :: Weights -> Double -> Difficulty -> [(Text, Record)] -> GameDb -> [Item] -> [Item] -> [UpgradeRow]
-findUpgrades w target diff extra db base candidates =
-  sortOn (negate . urScore) [r | cand <- candidates, let r = scoreOne cand, urScore r > 0]
+-- (devotions, mastery, skill buffs), held constant across candidates. @slotOcc@
+-- selects which equipped item of the candidate's slot type to replace (e.g. the
+-- second ring), so symmetric slots can be compared independently.
+findUpgrades :: Weights -> Double -> Difficulty -> Int -> Character -> [(Text, Record)] -> GameDb -> [Item] -> [(Text, Item)] -> [UpgradeRow]
+findUpgrades w target diff slotOcc c extra db base candidates =
+  sortOn (negate . urScore) [r | (loc, cand) <- candidates, let r = scoreOne loc cand, urScore r > 0]
   where
     srcBase = statSources db base ++ extra
     rB = resistRows diff srcBase
     kB = keyTotalsOf srcBase
-    dmgB = damageScore srcBase
+    dpsB = estTotalDps srcBase
     pen x = let d = target - x in if d > 0 then d * d else 0
     flatOf l ks = case [f | (lab, f, _) <- ks, lab == l] of (x : _) -> x; [] -> 0
-    scoreOne cand =
-      let over = overlay db base [cand]
+    -- the single number we treat as "damage": the highest active attack's DPS with
+    -- every proc folded in (procs fire automatically while you attack), so the
+    -- delta approximates the real change to sustained output.
+    estTotalDps src =
+      let rows = attackDps db src c
+          actives = filter ((== Active) . adKind) rows
+          best = if null actives then 0 else maximum (map adDps actives)
+       in best + sum [adDps r | r <- rows, adKind r == Triggered]
+    scoreOne loc cand =
+      let over = overlayAt db slotOcc base cand
           srcO = statSources db over ++ extra
           rO = resistRows diff srcO
           kO = keyTotalsOf srcO
@@ -588,30 +668,33 @@ findUpgrades w target diff extra db base candidates =
           resScore = sum [pen b - pen a | ((_, b, _, _), (_, a, _, _)) <- paired]
           oaD = flatOf "Offensive Ability" kO - flatOf "Offensive Ability" kB
           daD = flatOf "Defensive Ability" kO - flatOf "Defensive Ability" kB
-          dmgD = damageScore srcO - dmgB
+          dpsD = estTotalDps srcO - dpsB
           attrs = itemAttrs cand db
-          sc = wResist w * resScore + wOa w * oaD + wDa w * daD + wDamage w * dmgD
-       in UpgradeRow sc (iaDisplayName attrs) (iaLevelRequirement attrs) changes oaD daD dmgD
+          sc = wResist w * resScore + wOa w * oaD + wDa w * daD + wDamage w * dpsD
+       in UpgradeRow sc (iaDisplayName attrs) loc (iaLevelRequirement attrs) changes oaD daD dpsD cand
 
--- | Render the ranked upgrade rows. Resist changes are coloured by type when
+-- | Render one upgrade row: a header line naming the item and where it is, then
+-- each resistance change on its own line (stacked for easy comparison), then a
+-- single OA/DA/DPS summary. The DPS figure is the approximate change to your
+-- best attack with all procs folded in. Resist lines are coloured by type when
 -- @useColor@ is set.
-renderUpgrades :: Bool -> [UpgradeRow] -> Text
-renderUpgrades useColor = T.unlines . concatMap fmtRow
+renderUpgradeRow :: Bool -> UpgradeRow -> Text
+renderUpgradeRow useColor r =
+  T.unlines $
+    ("  +" <> showScore (urScore r) <> "  lvl " <> lvl <> "  " <> urName r <> "  [" <> urLocation r <> "]")
+      : map resLine (urResists r)
+      ++ offLines
   where
-    fmtRow r =
-      [ "  " <> rpad 7 (showScore (urScore r)) <> "  lvl " <> rpad 3 (lvl r) <> "  " <> urName r
-      , T.replicate 13 " " <> body r
-      ]
-    lvl r = maybe "-" (T.pack . show) (urLevel r)
-    body r =
-      T.intercalate "; " (map (colorByType useColor . resseg) (urResists r)) <> off r
-    resseg (n, b, a) = n <> " " <> showN b <> "% -> " <> showN a <> "% (" <> sign (a - b) <> ")"
-    off r =
+    lvl = maybe "-" (T.pack . show) (urLevel r)
+    resLine (n, b, a) =
+      T.replicate 8 " "
+        <> colorByType useColor (pad 16 n <> rpad 6 (showN b <> "%") <> " -> " <> rpad 6 (showN a <> "%") <> "  (" <> sign (a - b) <> ")")
+    offLines =
       let parts =
             ["OA " <> sign (urOa r) | urOa r /= 0]
               ++ ["DA " <> sign (urDa r) | urDa r /= 0]
-              ++ ["dmg " <> sign (urDamage r) | urDamage r /= 0]
-       in if null parts then "" else (if null (urResists r) then "" else "  ") <> "[" <> T.intercalate ", " parts <> "]"
+              ++ ["~DPS " <> sign (fromIntegral (round (urDpsDelta r) :: Integer)) | round (urDpsDelta r) /= (0 :: Integer)]
+       in [T.replicate 8 " " <> "[" <> T.intercalate ", " parts <> "]" | not (null parts)]
     showScore x = T.pack (show (round x :: Integer))
 
 --------------------------------------------------------------------------------
@@ -624,9 +707,15 @@ renderUpgrades useColor = T.unlines . concatMap fmtRow
 assumedBaseAttackSpeed :: Double
 assumedBaseAttackSpeed = 1.0
 
+-- | Whether a row is an attack you actively use (pick one to spam/cast) or a
+-- proc that fires automatically while you attack (additive on top).
+data AttackKind = Active | Triggered
+  deriving (Show, Eq)
+
 data AttackDps = AttackDps
   { adName :: !Text
   , adRank :: !(Maybe Int) -- Nothing for the bare weapon attack
+  , adKind :: !AttackKind
   , adPerHit :: !Double
   , adDps :: !Double
   , adRate :: !Text -- human description of the rate used
@@ -657,11 +746,24 @@ atRank i v = case v of
 -- (per-second x duration) which, since DoTs stack, contributes at the attack
 -- rate; chance-based cooldown resets count as expected value. A bare
 -- "Weapon Attack" row (100% weapon damage, no skill) is included as a baseline.
--- No crit, enemy resistances, or other chance procs.
+--
+-- Rows come in two kinds. 'Active' attacks (above) are ones you pick between.
+-- 'Triggered' procs fire automatically while you attack and are additive: skills
+-- granted by gear (@itemSkillName@ + a @cast_\@...@ controller), procs bound to
+-- devotion stars (@templateAutoCast@), and learned on-hit skills
+-- (@onHitActivationChance@, e.g. Vindictive Flame). A proc's expected DPS is
+-- @perHit / (cooldown + 1/(chance x attacks-per-second))@ — the cooldown plus the
+-- geometric wait for the next successful roll. Proc damage is flat (not weapon
+-- scaled) but still gets your conversions and @%@ modifiers. Only attack-driven
+-- triggers are modelled (on attack/hit/melee); on-crit/block/kill/low-health and
+-- persistent multi-hit ground effects are skipped or counted as a single hit.
+-- No crit or enemy resistances.
 attackDps :: GameDb -> [(Text, Record)] -> Character -> [AttackDps]
 attackDps db sources c =
-  sortOn (negate . adDps) [r | m <- weaponRow : map compute (charSkills c), Just r <- [m]]
+  sortOn (negate . adDps) actives ++ sortOn (negate . adDps) procs
   where
+    actives = [r | m <- weaponRow : map compute (charSkills c), Just r <- [m]]
+    procs = [r | m <- map computeWps (charSkills c) ++ itemProcs ++ devoProcs ++ onHitProcs, Just r <- [m]]
     lv = collectSkillLevels sources
     totalPct = sumField sources "offensiveTotalDamageModifier"
     aps = assumedBaseAttackSpeed * (1 + sumField sources "characterAttackSpeedModifier" / 100)
@@ -690,11 +792,24 @@ attackDps db sources c =
     tmpl r = maybe "" T.toLower (HM.lookup "templateName" r >>= valueText)
     -- a primary attack emits a row; its transmuters/modifiers/secondaries fold in.
     isPrimary r = not (any (`T.isInfixOf` tmpl r) ["secondary", "modifier", "transmuter", "passive", "buff"])
+    -- a skill that fires on hit/attack (e.g. Vindictive Flame) — a proc, not an
+    -- attack you actively use.
+    isOnHit r = "onhit" `T.isInfixOf` tmpl r
+    -- a weapon-pool skill (WPS, e.g. Bursting Round): has a per-rank chance to
+    -- replace your attack swing (skillChanceWeight). Unlike a default-attack
+    -- replacer (Fire Strike, Cadence) it stacks on top of whatever you spam.
+    isWps r = HM.member "skillChanceWeight" r
     compute s
       | not ("records/skills/playerclass" `T.isPrefixOf` skName s) = Nothing
       | skLevel s <= 0 = Nothing
       | otherwise = case lookupRecord (skName s) db of
-          Just r | isPrimary r -> emit s
+          Just r | isPrimary r && not (isOnHit r) && not (isWps r) -> emit s
+          _ -> Nothing
+    computeWps s
+      | not ("records/skills/playerclass" `T.isPrefixOf` skName s) = Nothing
+      | skLevel s <= 0 = Nothing
+      | otherwise = case lookupRecord (skName s) db of
+          Just r | isPrimary r && not (isOnHit r) && isWps r -> emitWps s r
           _ -> Nothing
     -- this skill plus its invested *non-primary* siblings (transmuters, modifiers,
     -- secondaries that share its base name) — other primary attacks that happen to
@@ -710,17 +825,30 @@ attackDps db sources c =
     emit s =
       let sibs = sibsOf s
        in mkRow (skillDisplayName db (skName s)) (Just (rankWith lv s)) (aggIn sibs "weaponDamagePct") (aggIn sibs "skillCooldownTime") sibs
+    -- a WPS row: weapon-scaled per-hit like an attack, but contributing only on
+    -- the @chance@ fraction of swings it replaces, so it adds to your spammed
+    -- attack rather than being an alternative to it.
+    emitWps s r =
+      let sibs = sibsOf s
+          rank = rankWith lv s
+          chance = maybe 0 (atRank (rank - 1)) (HM.lookup "skillChanceWeight" r) / 100
+          typed = typedDamage (aggIn sibs "weaponDamagePct") sibs
+          perHit = sum (map snd typed)
+          rate = showInt (chance * 100) <> "% WPS on attack"
+       in if perHit <= 0 || chance <= 0
+            then Nothing
+            else Just (AttackDps (skillDisplayName db (skName s)) (Just rank) Triggered perHit (perHit * chance * aps) rate typed)
     -- the bare auto-attack: 100% weapon damage, no skill, spammed at attack speed
     weaponRow = mkRow "Weapon Attack" Nothing 100 0 []
-    -- core per-application damage + DPS for a skill group (sibs) or the weapon
-    -- attack (sibs = []), given the group's aggregate weapon% and base cooldown.
-    mkRow name mRank wpnPct cdBase sibs =
-      let dotRecs = srcRecs ++ sibs -- gear + this skill group, for DoT
-          cdr = srcCdr + sum [cdrContrib i rr | (i, rr) <- sibs]
-          -- effective cooldown (floored so heavy CDR can't blow up the rate)
-          cd = max 0.1 (cdBase * (1 - cdr / 100))
+    -- The per-type per-application damage for a group of contributing records
+    -- @sibs@ (rank-indexed), with weapon damage scaling @wpnPct@: weapon flat (from
+    -- gear in @sources@) + retaliation-added, x weapon%, plus the records' own flat;
+    -- conversions; then % damage modifiers. Plus the stacking-DoT term. The weapon
+    -- attack and skills pass @wpnPct@/@sibs@; procs pass @wpnPct = 0@ and the single
+    -- proc record (its damage is flat, not weapon-scaled).
+    typedDamage wpnPct sibs =
+      let dotRecs = srcRecs ++ sibs
           rdaPct = rdaGlobal + sum [maybe 0 (atRank i) (HM.lookup "retaliationDamagePct" rr) | (i, rr) <- sibs]
-          -- the group's own flat (immediate) damage per type, incl. secondaries
           sflat stem =
             sum
               [ (maybe 0 (atRank i) (HM.lookup ("offensive" <> stem <> "Min") rr) + maybe 0 (atRank i) (HM.lookup ("offensive" <> stem <> "Max") rr)) / 2
@@ -740,17 +868,12 @@ attackDps db sources c =
             , let v = HM.lookupDefault 0 stem flat * (1 + pctOf stem / 100)
             , v >= 1
             ]
-          -- damage-over-time per application: (per-second x duration) over gear +
-          -- this skill group. Since DoTs stack, this per-application total x the
-          -- attack rate is its sustained DPS contribution. Conversions apply to
-          -- the DoT too (e.g. Fire->Acid converts Burn to the Poison DoT), so the
-          -- raw totals are converted before the destination type's DoT modifiers.
           dotRaw stem =
             let perRec (i, r) =
                   (maybe 0 (atRank i) (HM.lookup ("offensiveSlow" <> stem <> "Min") r) + maybe 0 (atRank i) (HM.lookup ("offensiveSlow" <> stem <> "Max") r)) / 2
                     * maybe 0 (atRank i) (HM.lookup ("offensiveSlow" <> stem <> "DurationMin") r)
-                gearDot = sum (map perRec srcRecs) -- weapon-scaled (like flat gear damage)
-                skillDot = sum (map perRec sibs) -- the skill's own DoT
+                gearDot = sum (map perRec srcRecs)
+                skillDot = sum (map perRec sibs)
              in gearDot * wpnPct / 100 + skillDot
           dotConv = applyConversions (globalConv ++ skillConv) (HM.fromList [(stem, dotRaw stem) | (stem, _) <- dotElems])
           dotMods stem =
@@ -762,7 +885,13 @@ attackDps db sources c =
             , let v = HM.lookupDefault 0 stem dotConv * dotMods stem
             , v >= 1
             ]
-          typed = immediate ++ dot
+       in immediate ++ dot
+    -- an actively-used attack (skill group or weapon attack): spam at attack speed
+    -- (weapon%) or once per cooldown.
+    mkRow name mRank wpnPct cdBase sibs =
+      let cdr = srcCdr + sum [cdrContrib i rr | (i, rr) <- sibs]
+          cd = max 0.1 (cdBase * (1 - cdr / 100)) -- floored so heavy CDR can't blow up the rate
+          typed = typedDamage wpnPct sibs
           perHit = sum (map snd typed)
           (dps, rate)
             | cdBase > 0 = (perHit / cd, oneDp cd <> "s cooldown")
@@ -770,7 +899,51 @@ attackDps db sources c =
             | otherwise = (0, "")
        in if perHit <= 0 || T.null rate
             then Nothing
-            else Just (AttackDps name mRank perHit dps rate typed)
+            else Just (AttackDps name mRank Active perHit dps rate typed)
+    -- a proc: fires automatically on attack/hit at chance @p@, no more than once
+    -- per cooldown. Expected interval = cooldown + the geometric wait for the next
+    -- successful roll (@1 / (p x attacks-per-second)@). Damage is flat (no weapon
+    -- scaling). @rank@ is the granted/invested level used to index value arrays.
+    mkProc name rank rec p cd trig =
+      let typed = typedDamage 0 [(rank - 1, rec)]
+          perHit = sum (map snd typed)
+          interval = cd + 1 / max 0.01 (p * aps)
+          rate = showInt (p * 100) <> "% on " <> trig <> ", " <> oneDp cd <> "s cd"
+       in if perHit <= 0 then Nothing else Just (AttackDps name Nothing Triggered perHit (perHit / interval) rate typed)
+    showInt x = T.pack (show (round x :: Integer))
+    levelOf v = maybe 1 id (v >>= valueText >>= (readMaybe . T.unpack))
+    -- procs granted by equipped items (itemSkillName + a cast_@... controller)
+    itemProcs =
+      [ mkProc (skillDisplayName db skn) rank rec p cd trig
+      | (skn, ir) <- nubBy (\a b -> fst a == fst b) [(s, ir) | (_, ir) <- sources, Just s <- [lookupField "itemSkillName" ir >>= valueText]]
+      , Just rec <- [lookupRecord skn db]
+      , Just (trig, p) <- [lookupField "itemSkillAutoController" ir >>= valueText >>= parseProcController]
+      , let rank = levelOf (lookupField "itemSkillLevelEq" ir)
+      , let cd = maybe 0 (atRank (rank - 1)) (HM.lookup "skillCooldownTime" rec)
+      ]
+    -- procs bound to invested devotion stars (templateAutoCast controller)
+    devoProcs =
+      [ mkProc (skillDisplayName db (skName s)) rank rec p cd trig
+      | s <- charSkills c
+      , "skills/devotion" `T.isInfixOf` skName s
+      , skLevel s > 0
+      , Just rec <- [lookupRecord (skName s) db]
+      , Just (trig, p) <- [lookupField "templateAutoCast" rec >>= valueText >>= parseProcController]
+      , let rank = rankWith lv s
+      , let cd = maybe 0 (atRank (rank - 1)) (HM.lookup "skillCooldownTime" rec)
+      ]
+    -- learned skills that fire on hit (Skill_OnHit*), e.g. Vindictive Flame
+    onHitProcs =
+      [ mkProc (skillDisplayName db (skName s)) rank rec p cd "hit"
+      | s <- charSkills c
+      , "records/skills/playerclass" `T.isPrefixOf` skName s
+      , skLevel s > 0
+      , Just rec <- [lookupRecord (skName s) db]
+      , isOnHit rec
+      , let rank = rankWith lv s
+      , let p = maybe 1 (/ 100) (recNum rec "onHitActivationChance")
+      , let cd = maybe 0 (atRank (rank - 1)) (HM.lookup "skillCooldownTime" rec)
+      ]
 
 -- a number to one decimal place (e.g. cooldown seconds, attacks/sec)
 oneDp :: Double -> Text
@@ -813,9 +986,28 @@ applyConversions convs flat0 =
 
 -- | Render the DPS estimate rows (best first). Per-type damage is coloured by
 -- type when @useColor@ is set.
+-- | Render the DPS rows in two groups — the attacks you pick between, and the
+-- procs that fire automatically on top — followed by an estimated total (best
+-- single attack + all procs).
 renderDps :: Bool -> [AttackDps] -> Text
-renderDps useColor = T.unlines . concatMap fmt
+renderDps useColor rows =
+  T.unlines (intercalate [""] (filter (not . null) [block "Attacks (pick one):" actives, block "Procs (auto, while attacking):" procRows, combined]))
   where
+    actives = filter ((== Active) . adKind) rows
+    procRows = filter ((== Triggered) . adKind) rows
+    block title rs = if null rs then [] else title : concatMap fmt rs
+    combined
+      | null actives = []
+      | otherwise =
+          let best = maximum (map adDps actives)
+              procSum = sum (map adDps procRows)
+           in [ "Estimated total: best attack ~"
+                  <> showI best
+                  <> (if null procRows then "" else " + procs ~" <> showI procSum)
+                  <> " = ~"
+                  <> showI (best + procSum)
+                  <> " dps"
+              ]
     fmt r =
       [ "  "
           <> pad 30 (adName r <> maybe "" (\n -> " (" <> tshow n <> ")") (adRank r))
@@ -830,3 +1022,22 @@ renderDps useColor = T.unlines . concatMap fmt
       ]
     seg (t, d) = colorByType useColor (t <> " ~" <> showI d)
     showI x = T.pack (show (round x :: Integer))
+
+-- | Parse a proc controller path like @.../cast_\@enemyonattack_20%.dbr@ into an
+-- (attack-driven trigger label, chance fraction). Returns Nothing for triggers
+-- not driven by your attack rate (on block/kill/low-health) or that need crit
+-- (on-attack-crit), which the estimate does not model.
+parseProcController :: Text -> Maybe (Text, Double)
+parseProcController path = (,) <$> trig <*> chance
+  where
+    leaf = T.toLower (T.takeWhileEnd (/= '/') path)
+    chance = case T.breakOn "%" leaf of
+      (pre, suf)
+        | T.null suf -> Nothing
+        | otherwise -> (\n -> n / 100) <$> (readMaybe (T.unpack (T.takeWhileEnd isDigit pre)) :: Maybe Double)
+    trig
+      | "onattackcrit" `T.isInfixOf` leaf = Nothing
+      | "onattack" `T.isInfixOf` leaf = Just "attack"
+      | "onanyhit" `T.isInfixOf` leaf = Just "hit"
+      | "onmeleehit" `T.isInfixOf` leaf = Just "melee hit"
+      | otherwise = Nothing

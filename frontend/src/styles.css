@@ -1,0 +1,510 @@
+:root {
+  color-scheme: dark;
+  --bg: #14161a;
+  --panel: #1d2027;
+  --border: #2c313b;
+  --text: #d8dbe0;
+  --muted: #8b919c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+a {
+  color: #7fb3ff;
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+nav {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  height: 48px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+nav .brand {
+  font-weight: 700;
+  margin-right: 8px;
+}
+
+main {
+  padding: 20px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0 0 16px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+/* Sets map */
+.band {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 22px 0 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.sets-flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+}
+.set-card {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.set-card:hover {
+  border-color: #3f4654;
+}
+.set-card.selected {
+  border-color: #7fb3ff;
+  box-shadow: 0 0 0 1px #7fb3ff;
+}
+.set-card-head {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+.set-card-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.set-card-name.complete {
+  color: #6ddc7a;
+}
+.squares {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 224px;
+}
+.item-square {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #14161a;
+}
+.item-square.missing {
+  background: #262a31;
+  border: 1px dashed #3a3f49;
+}
+
+/* Sets: two-column layout (map on the left, preview on the right) */
+.sets-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 20px;
+  align-items: start;
+}
+.sets-main {
+  min-width: 0;
+}
+.set-preview {
+  position: sticky;
+  top: 68px;
+  max-height: calc(100vh - 88px);
+  overflow: auto;
+}
+@media (max-width: 900px) {
+  .sets-layout {
+    grid-template-columns: 1fr;
+  }
+  .set-preview {
+    position: static;
+    max-height: none;
+  }
+}
+
+/* Preview panel */
+.preview-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.preview-name {
+  font-weight: 700;
+  font-size: 16px;
+}
+.preview-name.complete {
+  color: #6ddc7a;
+}
+.set-totals {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.set-totals-head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #7fb3ff;
+  margin-bottom: 4px;
+}
+.preview-items {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.preview-item {
+  display: flex;
+  gap: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 10px;
+}
+.preview-item.missing {
+  opacity: 0.55;
+}
+.pin-body {
+  min-width: 0;
+}
+.set-bonus {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+.set-bonus-head {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #b56cff;
+  margin-bottom: 2px;
+}
+.pin-image {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  border: 1px dashed #3a3f49;
+  background: #20242c;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 20px;
+}
+.pin-remove {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pin-remove:hover {
+  color: #ff8888;
+}
+.btn {
+  background: #2a2f38;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.btn:hover {
+  background: #333a45;
+}
+
+/* Item attribute block (in-game style) */
+.item-attrs {
+  min-width: 0;
+}
+.ia-name {
+  font-weight: 700;
+  font-size: 15px;
+}
+.ia-meta {
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.ia-lines {
+  margin: 2px 0 0;
+  padding-left: 16px;
+}
+.ia-lines li {
+  font-size: 14px;
+}
+
+/* Resistance summary: an icon + value per type, like the in-game panel. Fixed
+   5-column grid + tabular digits so chips keep their place regardless of value. */
+.resist-row {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px 10px;
+  margin: 4px 0 10px;
+}
+.resist-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.resist-val {
+  font-variant-numeric: tabular-nums;
+}
+.resist-chip svg {
+  display: block;
+  flex: 0 0 auto;
+}
+.resist-chip.zero {
+  opacity: 0.35;
+}
+.total-group + .total-group {
+  margin-top: 8px;
+}
+.total-group-head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+/* Character cards */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.card {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 14px;
+}
+.card h3 {
+  margin: 0 0 6px;
+}
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #3a2330;
+  color: #ff9eb5;
+  margin-left: 6px;
+}
+
+/* Character summary */
+.section-head {
+  font-size: 16px;
+  margin: 24px 0 10px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.summary-panel {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.summary-block + .summary-block,
+.summary-cols {
+  margin-top: 14px;
+}
+.summary-head {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.summary-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 24px;
+}
+.stat-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.stat-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.stat-label {
+  color: var(--muted);
+}
+.stat-val {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.resist-chip.neg {
+  opacity: 0.6;
+}
+
+/* Attack DPS */
+.attacks-total {
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+.attacks-sub {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.attack-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+}
+.attack-card {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.attack-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+.attack-name {
+  font-weight: 700;
+}
+.attack-dps {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: #ffce3a;
+}
+.attack-meta {
+  font-size: 12px;
+  margin: 2px 0 6px;
+}
+.attack-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Equipment paper-doll grid */
+.equip-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-areas:
+    "head amulet"
+    "shoulders medal"
+    "chest ring1"
+    "hands ring2"
+    "legs relic"
+    "waist weapon1"
+    "feet weapon2";
+  gap: 8px;
+  max-width: 680px;
+  margin-bottom: 18px;
+}
+.equip-slot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 6px 8px;
+  min-height: 60px;
+}
+.equip-info {
+  min-width: 0;
+}
+.equip-name {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.equip-meta {
+  font-size: 11px;
+}
+.equip-slot .pin-image {
+  width: 44px;
+  height: 44px;
+}
+.equip-empty {
+  font-size: 12px;
+  font-style: italic;
+  opacity: 0.5;
+}
+
+/* Gear list */
+.gear {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+}
+.gear .gear-name {
+  font-weight: 700;
+}
+.gear .gear-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.gear ul {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+.gear li {
+  font-size: 14px;
+}
+.error {
+  color: #ff8888;
+}

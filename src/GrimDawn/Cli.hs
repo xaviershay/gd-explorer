@@ -14,7 +14,7 @@ module GrimDawn.Cli
   , commandParser
   ) where
 
-import Control.Monad (forM, unless)
+import Control.Monad (forM, forM_, unless)
 import Data.Char (toLower)
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
@@ -25,7 +25,8 @@ import System.Exit (exitFailure)
 import System.IO (hIsTerminalDevice, hPutStrLn, stderr, stdout)
 
 import Data.List (nubBy, sortOn)
-import GrimDawn.Aggregate (OwnedItem (..), loadCharacters, loadOwnedItems)
+import GrimDawn.Aggregate (OwnedItem (..), loadCharacters, loadOwnedItems, locationLabel)
+import GrimDawn.Formulas (craftableItems, loadKnownFormulas)
 import GrimDawn.Db (GameDb, loadGameDb)
 import GrimDawn.Gdc (Character (..), Item)
 import GrimDawn.Item (ItemAttrs (..), itemAttrs)
@@ -55,7 +56,7 @@ import GrimDawn.Report.Stats
   , renderDps
   , renderStats
   , renderStatsDiff
-  , renderUpgrades
+  , renderUpgradeRow
   , setWeight
   , skillSources
   , statSources
@@ -172,7 +173,7 @@ upgradesParser =
 upgradeOptsParser :: Parser UpgradeOpts
 upgradeOptsParser =
   UpgradeOpts
-    <$> (T.pack <$> strOption (long "slot" <> metavar "SLOT" <> value "boots" <> showDefault <> help "Item slot/type to search (e.g. boots, helm, ring)"))
+    <$> (T.pack <$> strOption (long "slot" <> metavar "SLOT" <> value "boots" <> showDefault <> help "Item slot/type to search (e.g. boots, helm; ring1/ring2 for the two ring slots)"))
     <*> difficultyOptWith Ultimate
     <*> option auto (long "target" <> metavar "N" <> value 80 <> showDefault <> help "Resistance goal % for the non-linear resist weighting")
     <*> optional (option auto (long "max-level" <> metavar "N" <> help "Only consider items requiring level <= N"))
@@ -242,11 +243,13 @@ run = \case
   CmdSets dir showAll -> do
     db <- loadGameDb dir >>= orDie
     owned <- loadOwnedItems dir >>= orDie
-    TIO.putStr (renderSetReport showAll (setReport db owned))
+    craftable <- loadCraftable dir db
+    TIO.putStr (renderSetReport showAll (setReport db (owned ++ craftable)))
   CmdItems dir flt -> do
     db <- loadGameDb dir >>= orDie
     owned <- loadOwnedItems dir >>= orDie
-    let rows = itemRows db flt owned
+    craftable <- loadCraftable dir db
+    let rows = itemRows db flt (owned ++ craftable)
     useColor <- hIsTerminalDevice stdout
     TIO.putStr (renderItems useColor rows)
     unless (null rows) $ TIO.putStrLn (T.pack (show (length rows)) <> " items")
@@ -306,19 +309,23 @@ run = \case
         let base = charEquipped c
             nonSkill = statSources db base ++ devotionSources db c ++ masterySources db c
             extra = devotionSources db c ++ masterySources db c ++ skillSources (uoBuffs uo) nonSkill db c
-            flt = emptyFilter {ifType = Just (uoSlot uo), ifMaxLevel = uoMaxLevel uo}
+            (slotName, slotOcc) = slotTarget (uoSlot uo)
+            flt = emptyFilter {ifType = Just slotName, ifMaxLevel = uoMaxLevel uo}
             dn it = iaDisplayName (itemAttrs it db)
             candidates =
-              nubBy (\a b -> dn a == dn b)
-                [oiItem oi | oi <- owned, matchesFilter flt (itemAttrs (oiItem oi) db) (oiLocation oi)]
-            rows = findUpgrades (uoWeights uo) (uoTarget uo) (uoDifficulty uo) extra db base candidates
+              nubBy (\a b -> dn (snd a) == dn (snd b))
+                [(locationLabel (oiLocation oi), oiItem oi) | oi <- owned, matchesFilter flt (itemAttrs (oiItem oi) db) (oiLocation oi)]
+            rows = take 3 (findUpgrades (uoWeights uo) (uoTarget uo) (uoDifficulty uo) slotOcc c extra db base candidates)
             w = uoWeights uo
         if null rows
           then TIO.putStrLn ("No " <> uoSlot uo <> " improve " <> charName c <> " with the given weights.")
           else do
             TIO.putStrLn
-              ( uoSlot uo
-                  <> " that improve "
+              ( "Top "
+                  <> T.pack (show (length rows))
+                  <> " "
+                  <> uoSlot uo
+                  <> " for "
                   <> charName c
                   <> " ("
                   <> T.pack (map toLower (show (uoDifficulty uo)))
@@ -330,10 +337,11 @@ run = \case
                   <> wnum (wDa w)
                   <> " damage="
                   <> wnum (wDamage w)
-                  <> "), best first:"
+                  <> "):"
               )
-            TIO.putStrLn ""
-            TIO.putStr (renderUpgrades useColor rows)
+            forM_ rows $ \r -> do
+              TIO.putStrLn ""
+              TIO.putStr (renderUpgradeRow useColor r)
   CmdDps dir name buffs -> do
     db <- loadGameDb dir >>= orDie
     chars <- loadCharacters dir >>= orDie
@@ -362,6 +370,28 @@ run = \case
               )
             TIO.putStrLn ""
             TIO.putStr (renderDps useColor rows)
+
+-- | Load the items craftable from learned blueprints (@save/formulas.gst@),
+-- as synthetic owned items. A missing file is silent; a parse error warns and
+-- yields none, so the rest of the report is unaffected.
+loadCraftable :: FilePath -> GameDb -> IO [OwnedItem]
+loadCraftable dir db = do
+  result <- loadKnownFormulas dir
+  case result of
+    Right names -> pure (craftableItems db names)
+    Left err -> do
+      hPutStrLn stderr ("warning: could not read formulas.gst: " ++ err)
+      pure []
+
+-- | Resolve a @--slot@ argument into the item type used for filtering candidates
+-- and which equipped item of that type to replace (0-based). The two ring slots
+-- are addressed as @ring1@/@ring2@ (bare @ring@ means the first); every other
+-- slot maps to itself at occurrence 0.
+slotTarget :: Text -> (Text, Int)
+slotTarget s = case T.toLower s of
+  "ring1" -> ("ring", 0)
+  "ring2" -> ("ring", 1)
+  _ -> (s, 0)
 
 -- | Resolve an overlay item by display name among owned items (exact match
 -- preferred, else first case-insensitive substring match).

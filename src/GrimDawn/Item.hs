@@ -59,6 +59,8 @@ data ItemAttrs = ItemAttrs
   , iaSkillBonuses :: ![Text] -- rendered skill bonuses, e.g. "+1 to all Skills", "Grants Ring of Steel"
   , iaIsSet :: !Bool
   , iaSetRecord :: !(Maybe Text)
+  , iaBitmap :: !(Maybe Text) -- texture path inside the asset archive, e.g.
+  -- "items/gearhead/bitmaps/d115_head.tex"
   }
   deriving (Show, Eq)
 
@@ -652,6 +654,7 @@ itemAttrs it db =
     , iaSkillBonuses = skillBonuses db related
     , iaIsSet = any (HM.member "itemSetName" . snd) related
     , iaSetRecord = setRecordName it db
+    , iaBitmap = base >>= \b -> maybe (textField "artifactBitmap" b) Just (textField "bitmap" b)
     }
   where
     related = relatedRecords it db

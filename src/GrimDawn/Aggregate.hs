@@ -27,6 +27,7 @@ data Location
   | Inventory !Text -- character name
   | PersonalStash !Text -- character name
   | SharedStash -- the transfer stash
+  | Craftable -- not owned, but a learned blueprint can craft it
   deriving (Show, Eq)
 
 -- | An item together with its provenance.
@@ -42,6 +43,7 @@ locationLabel = \case
   Inventory c -> c <> " (inventory)"
   PersonalStash c -> c <> " (stash)"
   SharedStash -> "shared stash"
+  Craftable -> "craftable (blueprint)"
 
 -- | Load every owned item from @save/main/*/player.gdc@ and @save/transfer.gst@
 -- under @dataDir@. Missing pieces are skipped; a hard parse error is returned.

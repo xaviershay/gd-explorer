@@ -8,6 +8,8 @@ module GrimDawn.Arc
   ( loadLocalization
   , loadLocalizationFile
   , mergeLocalization
+  , loadArchive
+  , loadArchiveFile
   ) where
 
 import Control.Monad (replicateM, unless)
@@ -48,6 +50,8 @@ data RecHeader = RecHeader
   , rhDecompressed :: !Int
   , rhFileParts :: !Int
   , rhFirstPartIndex :: !Int
+  , rhStrLen :: !Int -- filename length in the string table
+  , rhStrOff :: !Int -- filename offset within the string table
   }
 
 readRecordHeaders :: ArcHeader -> Get [RecHeader]
@@ -64,9 +68,16 @@ readRecordHeaders hdr = do
       _filetime <- int64
       fileParts <- fromIntegral <$> int32
       firstPart <- fromIntegral <$> int32
-      _strLen <- int32
-      _strOff <- int32
-      pure (RecHeader entryType offset csize dsize fileParts firstPart)
+      strLen <- fromIntegral <$> int32
+      strOff <- fromIntegral <$> int32
+      pure (RecHeader entryType offset csize dsize fileParts firstPart strLen strOff)
+
+-- the filename of a record, read from the string table (which immediately
+-- follows the record/file-parts table).
+entryName :: BS.ByteString -> ArcHeader -> RecHeader -> Text
+entryName raw hdr rh =
+  let start = ahRecordTableOffset hdr + ahRecordTableSize hdr + rhStrOff rh
+   in TE.decodeUtf8Lenient (BS.take (rhStrLen rh) (BS.drop start raw))
 
 -- read a file-part header (offset, csize, dsize) at the i-th part slot
 readPartHeader :: ArcHeader -> RecHeader -> Int -> Get (Int, Int, Int)
@@ -103,13 +114,24 @@ parseLines bs = foldr addLine HM.empty (T.lines (TE.decodeUtf8Lenient bs))
               | T.null v -> acc -- no '=' on this line
               | otherwise -> HM.insert (T.strip k) (T.strip (T.drop 1 v)) acc
 
--- | Parse the localization table from raw @.arc@ bytes.
-loadLocalization :: BS.ByteString -> Either String LocalizationTable
-loadLocalization raw = do
+-- | Extract every entry of an @.arc@ as raw (decompressed) bytes, keyed by its
+-- filename (e.g. @items/gearhead/bitmaps/d115_head.tex@). Reused for both the
+-- localization tables (text entries) and binary assets (textures).
+loadArchive :: BS.ByteString -> Either String (HashMap Text BS.ByteString)
+loadArchive raw = do
   hdr <- runGet readHeader raw
   rhs <- runGet (readRecordHeaders hdr) raw
-  contents <- mapM (loadRecord raw hdr) rhs
-  pure (HM.unions (map parseLines contents))
+  entries <- mapM (\rh -> (,) (entryName raw hdr rh) <$> loadRecord raw hdr rh) rhs
+  pure (HM.fromList entries)
+
+-- | Load and extract an @.arc@ archive from disk.
+loadArchiveFile :: FilePath -> IO (Either String (HashMap Text BS.ByteString))
+loadArchiveFile fp = loadArchive <$> BS.readFile fp
+
+-- | Parse the localization table from raw @.arc@ bytes.
+loadLocalization :: BS.ByteString -> Either String LocalizationTable
+loadLocalization raw =
+  HM.unions . map parseLines . HM.elems <$> loadArchive raw
 
 -- | Load and parse a localization @.arc@ from disk.
 loadLocalizationFile :: FilePath -> IO (Either String LocalizationTable)

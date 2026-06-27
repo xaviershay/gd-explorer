@@ -26,6 +26,7 @@ helmAttrs =
     , iaSkillBonuses = ["+1 to all Skills", "Grants Ring of Steel"]
     , iaIsSet = False
     , iaSetRecord = Nothing
+    , iaBitmap = Nothing
     }
 
 loc :: Location

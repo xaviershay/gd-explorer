@@ -21,7 +21,8 @@
 #                           removes stale files under the remote PATH).
 #
 # Only the records gd-explorer reads are copied: the .arz databases, the English
-# localization .arc files, each character's player.gdc, and transfer.gst. Missing
+# localization .arc files, the Items.arc icon archives, each character's
+# player.gdc, and transfer.gst. Missing
 # expansion files are skipped (expansions are optional).
 #
 # This script is self-contained (just bash + rsync), so you can scp it to the
@@ -74,12 +75,16 @@ fi
 GAME_FILES=(
   "database/database.arz"
   "resources/Text_EN.arc"
+  "resources/Items.arc"
   "gdx1/database/GDX1.arz"
   "gdx1/resources/Text_EN.arc"
+  "gdx1/resources/Items.arc"
   "gdx2/database/GDX2.arz"
   "gdx2/resources/Text_EN.arc"
+  "gdx2/resources/Items.arc"
   "gdx3/database/GDX3.arz"
   "gdx3/resources/Text_EN.arc"
+  "gdx3/resources/Items.arc"
 )
 
 echo "Collecting game data -> $BUILD/game"
@@ -96,12 +101,14 @@ done
 echo "Collecting saves -> $BUILD/save"
 mkdir -p "$BUILD/save"
 
-if [ -f "$SAVE_SRC/transfer.gst" ]; then
-  rsync -a "$SAVE_SRC/transfer.gst" "$BUILD/save/transfer.gst"
-  echo "  + save/transfer.gst"
-else
-  echo "  - save/transfer.gst (not found, skipping)"
-fi
+for f in transfer.gst formulas.gst; do
+  if [ -f "$SAVE_SRC/$f" ]; then
+    rsync -a "$SAVE_SRC/$f" "$BUILD/save/$f"
+    echo "  + save/$f"
+  else
+    echo "  - save/$f (not found, skipping)"
+  fi
+done
 
 if [ -d "$SAVE_SRC/main" ]; then
   rsync -a --prune-empty-dirs \

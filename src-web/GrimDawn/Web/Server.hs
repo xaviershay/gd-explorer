@@ -1,0 +1,183 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+-- | A small local HTTP server (scotty + warp) for the web UI. The expensive game
+-- database is loaded once at startup and held resident; the tiny save data
+-- (characters + owned items) is re-read per request so the UI always reflects the
+-- latest play session without a restart. JSON endpoints feed the React frontend,
+-- whose built assets are served as static files.
+module GrimDawn.Web.Server
+  ( ServeOpts (..)
+  , runServer
+  , textureKey
+  ) where
+
+import Control.Monad (filterM, forM)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BL
+import Data.HashMap.Strict (HashMap)
+import qualified Data.HashMap.Strict as HM
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.List (find)
+import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
+import Network.HTTP.Types (status200, status404, status500)
+import Network.Wai (Application, Middleware, pathInfo, responseFile, responseLBS)
+import Network.Wai.Application.Static (defaultWebAppSettings, staticApp)
+import System.Directory (doesDirectoryExist, doesFileExist)
+import System.Exit (exitFailure)
+import System.FilePath ((</>))
+import System.IO (hPutStrLn, stderr)
+import Web.Scotty
+import WaiAppStatic.Types (ss404Handler, ssIndices, unsafeToPiece)
+
+import GrimDawn.Aggregate (loadCharacters, loadOwnedItems)
+import GrimDawn.Arc (loadArchiveFile)
+import GrimDawn.Db (GameDb, loadGameDb)
+import GrimDawn.Gdc (Character (..), itemWithName)
+import GrimDawn.Item (iaBitmap, itemAttrs)
+import GrimDawn.Web.Texture (decodeTexture)
+import GrimDawn.Web.View (detailView, setsView, summaryView)
+
+data ServeOpts = ServeOpts
+  { soPort :: !Int
+  , soDataDir :: !FilePath -- root holding game/ and save/
+  , soStaticDir :: !FilePath -- built frontend (frontend/dist)
+  }
+  deriving (Show, Eq)
+
+-- | Asset-archive entries (texture path -> raw bytes), lazily loaded on first
+-- image request and cached. Keys are lowercased for case-insensitive lookup.
+type Textures = HashMap Text BS.ByteString
+
+-- | Load the game database once, then serve the API + static frontend.
+runServer :: ServeOpts -> IO ()
+runServer opts = do
+  hPutStrLn stderr "Loading game database (this takes a few seconds)..."
+  dbE <- loadGameDb (soDataDir opts)
+  case dbE of
+    Left e -> hPutStrLn stderr ("error: " ++ e) >> exitFailure
+    Right db -> do
+      haveStatic <- doesDirectoryExist (soStaticDir opts)
+      if haveStatic
+        then hPutStrLn stderr ("Serving frontend from " ++ soStaticDir opts)
+        else hPutStrLn stderr ("note: no frontend build at " ++ soStaticDir opts ++ " (API only); run `npm --prefix frontend run build`")
+      texCache <- newIORef Nothing
+      hPutStrLn stderr ("Listening on http://localhost:" ++ show (soPort opts))
+      scotty (soPort opts) (routes db texCache opts)
+
+routes :: GameDb -> IORef (Maybe Textures) -> ServeOpts -> ScottyM ()
+routes db texCache opts = do
+  middleware (staticMiddleware (soStaticDir opts))
+
+  get "/api/sets" $ do
+    owned <- loadOr (loadOwnedItems (soDataDir opts))
+    json (setsView db owned)
+
+  get "/api/characters" $ do
+    chars <- loadOr (loadCharacters (soDataDir opts))
+    json (map (summaryView db) chars)
+
+  get "/api/characters/:name" $ do
+    name <- pathParam "name"
+    chars <- loadOr (loadCharacters (soDataDir opts))
+    case findChar name chars of
+      Just c -> json (detailView db c)
+      Nothing -> do
+        status status404
+        text ("no character named " <> TL.fromStrict name)
+
+  -- An item's icon, decoded from the asset archive's .tex to PNG. 404s cleanly
+  -- when the texture archive isn't synced or the icon can't be decoded, so the
+  -- frontend falls back to a placeholder.
+  get "/api/item-image/:record" $ do
+    rec <- pathParam "record"
+    case iaBitmap (itemAttrs (itemWithName rec) db) of
+      Nothing -> status status404 >> text "no bitmap for item"
+      Just path -> do
+        tex <- liftIO (getTextures texCache opts)
+        case HM.lookup (textureKey path) tex >>= decodeTexture of
+          Just png -> do
+            setHeader "Content-Type" "image/png"
+            setHeader "Cache-Control" "max-age=86400"
+            raw (BL.fromStrict png)
+          Nothing -> status status404 >> text "texture unavailable"
+
+-- | Run an @Either@-returning loader, turning a @Left@ into a 500 response.
+loadOr :: IO (Either String a) -> ActionM a
+loadOr act = do
+  r <- liftIO act
+  case r of
+    Right x -> pure x
+    Left e -> do
+      status status500
+      text (TL.pack ("error: " ++ e))
+      finish
+
+-- | Match a character by name, case-insensitively (mirrors @Cli.findChar@).
+findChar :: Text -> [Character] -> Maybe Character
+findChar name = find ((== T.toLower name) . T.toLower . charName)
+
+-- | Normalise an item's @bitmap@ path to its archive key. Records reference
+-- textures as @items/<...>.tex@, but @Items.arc@ stores them without the leading
+-- @items/@ segment; keys are lowercased for case-insensitive lookup.
+textureKey :: Text -> Text
+textureKey path = let p = T.toLower path in maybe p id (T.stripPrefix "items/" p)
+
+-- | Texture archive entries, loaded+merged on first use and cached. Empty (so
+-- every image 404s) when no asset archive is present under the data dir.
+getTextures :: IORef (Maybe Textures) -> ServeOpts -> IO Textures
+getTextures cache opts = do
+  cached <- readIORef cache
+  case cached of
+    Just t -> pure t
+    Nothing -> do
+      t <- loadTextures opts
+      writeIORef cache (Just t)
+      pure t
+
+loadTextures :: ServeOpts -> IO Textures
+loadTextures opts = do
+  let candidates =
+        [ soDataDir opts </> "game" </> rel
+        | rel <-
+            [ "resources/Items.arc"
+            , "gdx1/resources/Items.arc"
+            , "gdx2/resources/Items.arc"
+            , "gdx3/resources/Items.arc"
+            ]
+        ]
+  present <- filterM doesFileExist candidates
+  maps <- forM present $ \fp -> do
+    r <- loadArchiveFile fp
+    case r of
+      Left e -> hPutStrLn stderr ("warning: " ++ fp ++ ": " ++ e) >> pure HM.empty
+      Right m -> pure (HM.fromList [(T.toLower k, v) | (k, v) <- HM.toList m])
+  pure (HM.unions maps)
+
+-- | Serve the built frontend for non-API requests, falling back to index.html so
+-- client-side routes deep-link correctly. API requests pass through to scotty.
+staticMiddleware :: FilePath -> Middleware
+staticMiddleware dir inner req respond
+  | isApi = inner req respond
+  | otherwise = staticApp settings req respond
+  where
+    isApi = case pathInfo req of
+      ("api" : _) -> True
+      _ -> False
+    settings =
+      (defaultWebAppSettings dir)
+        { ssIndices = [unsafeToPiece "index.html"]
+        , ss404Handler = Just (indexFallback dir)
+        }
+
+-- | Serve index.html (HTTP 200) so a single-page app's routes resolve; if it is
+-- missing (no build yet), return a plain 404.
+indexFallback :: FilePath -> Application
+indexFallback dir _req respond = do
+  let index = dir </> "index.html"
+  present <- doesFileExist index
+  respond $
+    if present
+      then responseFile status200 [("Content-Type", "text/html")] index Nothing
+      else responseLBS status404 [("Content-Type", "text/plain")] "not found"

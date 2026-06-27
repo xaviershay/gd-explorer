@@ -7,6 +7,7 @@ import GrimDawn.Db (GameDb (..))
 import GrimDawn.Gdc (Character (..), Item (..), Skill (..))
 import GrimDawn.Report.Stats
   ( AttackDps (..)
+  , AttackKind (..)
   , BuffToggle (..)
   , Difficulty (..)
   , UpgradeRow (..)
@@ -16,7 +17,9 @@ import GrimDawn.Report.Stats
   , findUpgrades
   , noBuffs
   , overlay
+  , overlayAt
   , parseBuffs
+  , parseProcController
   , renderStats
   , skillSources
   )
@@ -58,6 +61,9 @@ synthDb =
             )
           , ( "records/items/ring.dbr"
             , HM.fromList [("Class", VString "ArmorJewelry_Ring"), ("defensiveChaos", VFloat 20)]
+            )
+          , ( "records/items/ringB.dbr"
+            , HM.fromList [("Class", VString "ArmorJewelry_Ring"), ("defensiveChaos", VFloat 40)]
             )
           , -- a devotion star granting +18 Defensive Ability
             ( "records/skills/devotion/tier1_15a.dbr"
@@ -138,14 +144,32 @@ synthDb =
                 , ("skillCooldownReductionChance", VFloat 25)
                 ]
             )
+          , -- an item that grants a proc: 50% chance on attack, 2s cooldown
+            ( "records/items/relicProc.dbr"
+            , HM.fromList
+                [ ("itemSkillName", VString "records/skills/itemskills/proc1.dbr")
+                , ("itemSkillAutoController", VString "records/controllers/itemskills/cast_@enemyonattack_50%.dbr")
+                , ("itemSkillLevelEq", VString "1")
+                ]
+            )
+          , ( "records/skills/itemskills/proc1.dbr"
+            , HM.fromList
+                [ ("templateName", VString "database/templates/skill_attackprojectile.tpl")
+                , ("skillDisplayName", VString "Testproc")
+                , ("offensiveFireMin", VFloat 100)
+                , ("offensiveFireMax", VFloat 100)
+                , ("skillCooldownTime", VFloat 2)
+                ]
+            )
           ]
     , gdbText = HM.empty
     }
 
-helm, helmB, ring :: Item
+helm, helmB, ring, ringB :: Item
 helm = blankItem {itemBaseName = "records/items/helm.dbr"}
 helmB = blankItem {itemBaseName = "records/items/helmB.dbr"}
 ring = blankItem {itemBaseName = "records/items/ring.dbr"}
+ringB = blankItem {itemBaseName = "records/items/ringB.dbr"}
 
 items :: [Item]
 items = [blankItem {itemBaseName = "records/items/helm.dbr"}]
@@ -181,6 +205,41 @@ spec = describe "renderStats (synthetic)" $ do
   it "overlay adds an item with no matching slot" $
     map itemBaseName (overlay synthDb [helm] [ring])
       `shouldBe` ["records/items/helm.dbr", "records/items/ring.dbr"]
+
+  it "overlayAt replaces the n-th equipped item of the candidate's slot type" $ do
+    -- two rings equipped (ring then ringB); the candidate is ringB, so the swap is
+    -- observable: occurrence 0 = ring1, occurrence 1 = ring2.
+    map itemBaseName (overlayAt synthDb 0 [helm, ring, ringB] ringB)
+      `shouldBe` ["records/items/helm.dbr", "records/items/ringB.dbr", "records/items/ringB.dbr"]
+    map itemBaseName (overlayAt synthDb 1 [helm, ring, ringB] ringB)
+      `shouldBe` ["records/items/helm.dbr", "records/items/ring.dbr", "records/items/ringB.dbr"]
+
+  it "overlayAt appends when the requested slot occurrence is empty" $
+    -- only one ring equipped; targeting ring2 (occurrence 1) fills the empty slot
+    map itemBaseName (overlayAt synthDb 1 [helm, ring] ringB)
+      `shouldBe` ["records/items/helm.dbr", "records/items/ring.dbr", "records/items/ringB.dbr"]
+
+  it "overlay inherits the replaced item's component and augment" $ do
+    let old =
+          helm
+            { itemRelicName = "records/items/comp.dbr"
+            , itemRelicBonus = "records/items/bonus.dbr"
+            , itemAugmentName = "records/items/aug.dbr"
+            }
+    case overlay synthDb [old] [helmB] of -- helmB is bare, same (head) slot
+      [r] -> do
+        itemBaseName r `shouldBe` "records/items/helmB.dbr"
+        itemRelicName r `shouldBe` "records/items/comp.dbr"
+        itemRelicBonus r `shouldBe` "records/items/bonus.dbr"
+        itemAugmentName r `shouldBe` "records/items/aug.dbr"
+      _ -> expectationFailure "expected one item"
+
+  it "overlay keeps the candidate's own component over the replaced item's" $ do
+    let old = helm {itemRelicName = "records/items/oldcomp.dbr"}
+        cand = helmB {itemRelicName = "records/items/candcomp.dbr"}
+    case overlay synthDb [old] [cand] of
+      [r] -> itemRelicName r `shouldBe` "records/items/candcomp.dbr"
+      _ -> expectationFailure "expected one item"
 
   it "includes devotion passive bonuses as extra sources" $ do
     let ch = mkChar [mkSkill "records/skills/devotion/tier1_15a.dbr"]
@@ -243,13 +302,14 @@ spec = describe "renderStats (synthetic)" $ do
 
   it "findUpgrades scores an overlay and keeps net-positive candidates" $ do
     -- helm grants 90% fire (capped 85), +100 OA, +50 DA; over empty gear it is an upgrade
-    let rows = findUpgrades defaultWeights 80 Normal [] synthDb [] [helm]
+    let rows = findUpgrades defaultWeights 80 Normal 0 (mkChar []) [] synthDb [] [("shared stash", helm)]
     case rows of
       (r : _) -> do
         (urScore r > 0) `shouldBe` True
         any (\(n, _, _) -> n == "Fire") (urResists r) `shouldBe` True
         urOa r `shouldBe` 100
         urDa r `shouldBe` 50
+        urLocation r `shouldBe` "shared stash"
       [] -> expectationFailure "expected helm to rank as an upgrade over empty gear"
 
   it "attackDps estimates per-hit and DPS from a weapon attack" $ do
@@ -362,6 +422,28 @@ spec = describe "renderStats (synthetic)" $ do
         lookup "Burn (dot)" (adTypes r) `shouldBe` Nothing -- converted away
         lookup "Poison (dot)" (adTypes r) `shouldBe` Just 30 -- 10/s x 3s, now Poison
       rs -> expectationFailure ("expected one skill row, got " ++ show (length rs))
+
+  it "parseProcController reads attack-driven trigger + chance, skipping others" $ do
+    parseProcController "records/controllers/itemskills/cast_@enemyonattack_20%.dbr" `shouldBe` Just ("attack", 0.2)
+    parseProcController "x/cast_@enemyonanyhit_100%.dbr" `shouldBe` Just ("hit", 1.0)
+    parseProcController "x/cast_@enemyonmeleehit_15%.dbr" `shouldBe` Just ("melee hit", 0.15)
+    parseProcController "x/cast_@enemyonattackcrit_30%.dbr" `shouldBe` Nothing -- needs crit
+    parseProcController "x/cast_@enemyonblock_25%.dbr" `shouldBe` Nothing -- not attack-driven
+
+  it "attackDps adds an item-granted proc with expected-value DPS" $ do
+    -- 100 fire, 2s cd, 50% on attack; aps = 1 (no attack-speed source)
+    let sources =
+          [ ("wpn", HM.fromList [("offensivePhysicalMin", VFloat 1), ("offensivePhysicalMax", VFloat 1)])
+          , ("relic", gdbRecords synthDb HM.! "records/items/relicProc.dbr")
+          ]
+    case filter ((== Triggered) . adKind) (attackDps synthDb sources (mkChar [])) of
+      [r] -> do
+        adName r `shouldBe` "Testproc"
+        lookup "Fire" (adTypes r) `shouldBe` Just 100
+        -- interval = cd 2 + 1/(0.5*1) = 4s  ->  100/4 = 25 dps
+        round (adDps r) `shouldBe` (25 :: Integer)
+        ("50% on attack" `T.isInfixOf` adRate r) `shouldBe` True
+      rs -> expectationFailure ("expected one proc row, got " ++ show (length rs))
 
   it "parseBuffs reads category lists" $ do
     parseBuffs "permanent,proc" `shouldBe` Right (BuffToggle True False True)

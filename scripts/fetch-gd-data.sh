@@ -145,9 +145,10 @@ log "Game files to copy (only those that exist):"
 game_rel=(
   "database/database.arz"
   "resources/Text_EN.arc"
-  "gdx1/database/GDX1.arz"  "gdx1/resources/Text_EN.arc"
-  "gdx2/database/GDX2.arz"  "gdx2/resources/Text_EN.arc"
-  "gdx3/database/GDX3.arz"  "gdx3/resources/Text_EN.arc"
+  "resources/Items.arc"
+  "gdx1/database/GDX1.arz"  "gdx1/resources/Text_EN.arc"  "gdx1/resources/Items.arc"
+  "gdx2/database/GDX2.arz"  "gdx2/resources/Text_EN.arc"  "gdx2/resources/Items.arc"
+  "gdx3/database/GDX3.arz"  "gdx3/resources/Text_EN.arc"  "gdx3/resources/Items.arc"
 )
 for rel in "${game_rel[@]}"; do
   if [ -f "$game_dir/$rel" ]; then
@@ -160,7 +161,7 @@ done
 
 echo
 log "Save files to copy:"
-for f in transfer.gst transfer.gsh; do
+for f in transfer.gst transfer.gsh formulas.gst; do
   [ -f "$save_dir/$f" ] && printf '      %s\n' "$f"
 done
 char_count=0
@@ -191,7 +192,7 @@ for rel in "${game_rel[@]}"; do
 done
 
 mkdir -p "$STAGING/save/main"
-for f in transfer.gst transfer.gsh; do
+for f in transfer.gst transfer.gsh formulas.gst; do
   [ -f "$save_dir/$f" ] && cp -p "$save_dir/$f" "$STAGING/save/$f"
 done
 while IFS= read -r gdc; do

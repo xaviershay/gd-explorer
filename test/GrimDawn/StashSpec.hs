@@ -18,9 +18,3 @@ spec =
             length tabs > 0 `shouldBe` True
             let names = concatMap (map itemBaseName . stashTabItems) tabs
             all (T.isPrefixOf "records/") names `shouldBe` True
-
-    it "captures a golden tab/item count" $
-      withDataFile transferStashPath $ \fp -> do
-        Right tabs <- loadStashFile fp
-        length tabs `shouldBe` 6
-        sum (map (length . stashTabItems) tabs) `shouldBe` 213

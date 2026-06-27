@@ -39,6 +39,7 @@ library:
     c-sources:
         - cbits/lz4_shim.c
     dependencies:
+        - aeson
         - bytestring
         - containers
         - unordered-containers
@@ -48,6 +49,25 @@ library:
         - filepath
         - mtl
         - optparse-applicative
+
+internal-libraries:
+    web:
+        source-dirs: src-web
+        dependencies:
+            - gd-explorer
+            - aeson
+            - bytestring
+            - directory
+            - filepath
+            - http-types
+            - JuicyPixels
+            - scotty
+            - text
+            - unordered-containers
+            - vector
+            - wai
+            - wai-app-static
+            - warp
 
 executables:
     gd-explorer:
@@ -59,6 +79,7 @@ executables:
             - -with-rtsopts=-N
         dependencies:
             - gd-explorer
+            - gd-explorer:web
             - optparse-applicative
             - text
 
@@ -72,6 +93,8 @@ tests:
             - -with-rtsopts=-N
         dependencies:
             - gd-explorer
+            - gd-explorer:web
+            - aeson
             - hspec
             - bytestring
             - containers
@@ -79,4 +102,5 @@ tests:
             - text
             - directory
             - filepath
+            - JuicyPixels
             - optparse-applicative

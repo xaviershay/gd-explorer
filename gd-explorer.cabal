@@ -1,4 +1,4 @@
-cabal-version: 2.2
+cabal-version: 3.0
 
 -- This file has been generated from package.yaml by hpack version 0.39.6.
 --
@@ -32,6 +32,7 @@ library
       GrimDawn.Cipher
       GrimDawn.Cli
       GrimDawn.Db
+      GrimDawn.Formulas
       GrimDawn.Gdc
       GrimDawn.Item
       GrimDawn.Lz4
@@ -41,6 +42,7 @@ library
       GrimDawn.Report.Sets
       GrimDawn.Report.Stats
       GrimDawn.Stash
+      GrimDawn.Web.View
   other-modules:
       Paths_gd_explorer
   autogen-modules:
@@ -59,7 +61,8 @@ library
   c-sources:
       cbits/lz4_shim.c
   build-depends:
-      base >=4.7 && <5
+      aeson
+    , base >=4.7 && <5
     , bytestring
     , containers
     , directory
@@ -69,6 +72,43 @@ library
     , text
     , unordered-containers
     , vector
+  default-language: Haskell2010
+
+library web
+  exposed-modules:
+      GrimDawn.Web.Server
+      GrimDawn.Web.Texture
+  other-modules:
+      Paths_gd_explorer
+  autogen-modules:
+      Paths_gd_explorer
+  hs-source-dirs:
+      src-web
+  default-extensions:
+      OverloadedStrings
+      LambdaCase
+      ScopedTypeVariables
+      TupleSections
+      BangPatterns
+      RecordWildCards
+      MultiWayIf
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
+  build-depends:
+      JuicyPixels
+    , aeson
+    , base >=4.7 && <5
+    , bytestring
+    , directory
+    , filepath
+    , gd-explorer
+    , http-types
+    , scotty
+    , text
+    , unordered-containers
+    , vector
+    , wai
+    , wai-app-static
+    , warp
   default-language: Haskell2010
 
 executable gd-explorer
@@ -91,6 +131,7 @@ executable gd-explorer
   build-depends:
       base >=4.7 && <5
     , gd-explorer
+    , gd-explorer:web
     , optparse-applicative
     , text
   default-language: Haskell2010
@@ -100,10 +141,12 @@ test-suite gd-explorer-test
   main-is: Spec.hs
   other-modules:
       GrimDawn.AggregateSpec
+      GrimDawn.ArcSpec
       GrimDawn.ArzSpec
       GrimDawn.BinarySpec
       GrimDawn.CliSpec
       GrimDawn.DbSpec
+      GrimDawn.FormulasSpec
       GrimDawn.GdcSpec
       GrimDawn.ItemSpec
       GrimDawn.Lz4Spec
@@ -112,6 +155,8 @@ test-suite gd-explorer-test
       GrimDawn.Report.SetsSpec
       GrimDawn.Report.StatsSpec
       GrimDawn.StashSpec
+      GrimDawn.Web.TextureSpec
+      GrimDawn.Web.ViewSpec
       TestHelpers
       Paths_gd_explorer
   autogen-modules:
@@ -128,12 +173,15 @@ test-suite gd-explorer-test
       MultiWayIf
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      base >=4.7 && <5
+      JuicyPixels
+    , aeson
+    , base >=4.7 && <5
     , bytestring
     , containers
     , directory
     , filepath
     , gd-explorer
+    , gd-explorer:web
     , hspec
     , optparse-applicative
     , text

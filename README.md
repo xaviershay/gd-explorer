@@ -26,8 +26,14 @@ data/gd-data/
     gdx3/database/GDX3.arz        gdx3/resources/Text_EN.arc   # Fangs of Asterkarn (optional)
   save/
     transfer.gst                 # shared/transfer stash
+    formulas.gst                 # learned crafting blueprints (optional)
     main/<CharacterName>/player.gdc
 ```
+
+If `formulas.gst` is present, the items your learned blueprints can craft are
+included in the `sets` and `items` reports, marked **craftable (blueprint)** — so
+a set piece you can craft counts toward completion. It's optional; without it
+those reports just show what you physically own.
 
 DLC tiers are optional — whatever is present is loaded and merged, with later
 DLCs overriding earlier ones.
@@ -236,7 +242,10 @@ gd-explorer character Shield --buffs permanent,temporary
 
 `--overlay NAME` (repeatable) swaps an owned item (matched by name) into its slot
 on the base character and prints the stat **diff** (resistances and key totals as
-`base -> new (delta)`), so you can see the impact of a gear change:
+`base -> new (delta)`), so you can see the impact of a gear change. The swapped-in
+item **inherits the replaced item's component and augment** (unless it has its
+own), so the comparison assumes you move your sockets over rather than losing
+them. Components and augments are always counted toward an item's resists/bonuses.
 
 ```sh
 gd-explorer character Shield --overlay "Faceguard of Perdition" --difficulty ultimate
@@ -266,13 +275,22 @@ The whole search runs in one process (the database loads once):
 gd-explorer upgrades Shield --slot boots --difficulty ultimate
 ```
 
-```
-boots that improve Shield (ultimate; weights resist=1 oa=50 da=50 damage=25), best first:
+Up to the **three** best options are shown, each titled with the item's name and
+**where it lives** (equipped/inventory/stash), its resistance changes stacked
+one-per-line (for easy comparison), and a single OA/DA/`~DPS` summary. The `~DPS`
+figure folds the whole damage picture into one number — the change to your
+**highest-DPS attack with every proc included** — so it reads as "roughly this
+much more/less damage":
 
-    21059  lvl  84  Mythical Venomspine Greaves
-             Fire 45% -> 67% (+22); ...; Pierce -22% -> 13% (+35)  [DA +80, dmg +160]
-    14760  lvl  84  Mythical Boots of Primordial Rage
-             Chaos 33% -> 59% (+26); ...  [OA +88, dmg +260]
+```
+Top 3 boots for Shield (ultimate; weights resist=2 oa=30 da=80 damage=1):
+
+  +8041  lvl 50  Golemborn Greaves  [shared stash]
+        Poison & Acid     -13% ->     2%  (+15)
+        Pierce            -22% ->    20%  (+42)
+        Bleeding          -12% ->   -24%  (-12)
+        Physical          -50% ->   -46%  (+4)
+        [DA +24, ~DPS +312]
 ```
 
 Each candidate is scored as a weighted sum of:
@@ -282,11 +300,17 @@ Each candidate is scored as a weighted sum of:
   lower the resistance is. This favours raising your weakest resistances and
   spreading losses (e.g. `-1` on eight beats `-8` on one).
 - **oa / da** — change in Offensive / Defensive Ability.
-- **damage** — change in a flat-plus-`%` offensive-value proxy.
+- **damage** — change in the `~DPS` estimate above.
 
-Tune the mix with `--weight CAT=FACTOR` (repeatable; `CAT` ∈ `resist oa da
-damage`); the defaults balance the components' scales. Other options: `--target`,
-`--max-level N` (only items requiring ≤ N), and `--buffs` (as for `character`).
+The defaults (`resist=2 oa=30 da=80 damage=1`) weight survivability —
+resistances and Defensive Ability — well above raw damage, so a piece that plugs
+a resist or DA hole beats one that only adds offence. Tune the mix with `--weight
+CAT=FACTOR` (repeatable; `CAT` ∈ `resist oa da damage`).
+
+The two ring slots are searched independently: `--slot ring1` compares candidates
+against your first equipped ring, `--slot ring2` against the second (an empty ring
+slot is treated as a pure addition). Other options: `--target`, `--max-level N`
+(only items requiring ≤ N), and `--buffs` (as for `character`).
 Resist types are coloured on a terminal, and each row shows the item's level
 requirement. `scripts/find-upgrades.sh [CHAR] [SLOT] [opts]` is a thin wrapper
 with positional character/slot.
@@ -298,21 +322,30 @@ gd-explorer upgrades Shield --slot boots --weight damage=2 --weight oa=0 --weigh
 
 ### `dps` — estimate attack-skill damage
 
-Estimates per-hit and DPS for each invested attack skill (best first):
+Estimates per-hit and DPS, split into **attacks you pick between** and **procs
+that fire automatically while you attack** (additive), with an estimated total:
 
 ```sh
-gd-explorer dps Shield
+gd-explorer dps Adam
 ```
 
 ```
-Attack DPS estimate for Shield  (assumed base 1 atk/s; conversions + stacking DoT applied; no crit or enemy resistance)
-
-  Aegis of Menhir (18)          per-hit ~  29998  ~  15384 dps  (2.0s cooldown)
-        Physical ~2776; Acid ~22948; Vitality ~517; Internal Trauma (dot) ~223; Poison (dot) ~3511
-  Shattering Smash (11)         per-hit ~   2461  ~   2708 dps  (~1.1/s attacks (assumed base))
-        Physical ~348; Acid ~702; Vitality ~73; Internal Trauma (dot) ~822; Poison (dot) ~517
-  Weapon Attack                 per-hit ~   1195  ~   1314 dps  (~1.1/s attacks (assumed base))
-        Physical ~213; Acid ~462; Vitality ~46; Internal Trauma (dot) ~110; Poison (dot) ~364
+Attacks (pick one):
+  Fire Strike (21)              per-hit ~  21591  ~  33465 dps  (~1.6/s attacks (assumed base))
+        Fire ~10660; Acid ~713; Chaos ~279; Burn (dot) ~9725; Poison (dot) ~214
+  Bursting Round (13)           per-hit ~  13743  ~  21302 dps  (~1.6/s attacks (assumed base))
+        Fire ~7735; Acid ~577; Burn (dot) ~5265; Poison (dot) ~166
+  Weapon Attack                 per-hit ~   8019  ~  12429 dps  (~1.6/s attacks (assumed base))
+        ...
+Procs (auto, while attacking):
+  Meteor                        per-hit ~  26383  ~   4608 dps  (20% on attack, 2.5s cd)
+        Fire ~5921; Acid ~480; Burn (dot) ~19982
+  Meteor Shower                 per-hit ~   3563  ~    630 dps  (30% on attack, 3.5s cd)
+        Fire ~1011; Acid ~54; Burn (dot) ~2498
+  Vindictive Flame              per-hit ~   1279  ~    596 dps  (100% on hit, 1.5s cd)
+        Fire ~1233; Acid ~46
+  ...
+Estimated total: best attack ~33465 + procs ~8332 = ~41798 dps
 ```
 
 Per type, per-hit = `(weapon-flat × weaponDamagePct + skill-flat) × (1 + %damage)`,
@@ -337,9 +370,21 @@ modifiers) × the attack rate — valid because GD DoTs stack. **Chance-based
 cooldown resets** (e.g. Reprisal) count as expected value (`chance × reduction`).
 Conversions apply to the DoT too (e.g. Fire→Acid turns Burn into the Poison DoT).
 A bare **Weapon Attack** row (100% weapon damage, no skill) is always included as
-a baseline. This is a **rough, relative** estimate: no crit, enemy resistances,
-other chance-based procs, or the "Elemental"/multi-type conversion forms — good
-for comparing ranks/gear, not a true DPS. `--buffs` works as for `character`.
+a baseline.
+
+**Procs** are gathered from gear-granted skills (`itemSkillName` + a
+`cast_@…` controller), devotion-bound skills (`templateAutoCast`), and learned
+on-hit skills (e.g. Vindictive Flame). Each proc's expected DPS is
+`per-hit ÷ (cooldown + 1 / (chance × attacks-per-second))` — the cooldown plus
+the average wait for the next successful trigger. Proc damage is flat (not
+weapon-scaled) but still gets your conversions and `%` modifiers. Only
+attack-driven triggers are modelled (on attack / hit / melee); on-crit, on-block,
+on-kill, and low-health procs are skipped, and persistent multi-hit ground
+effects (Meteor Shower, Fissure) are counted as a single hit (an undercount).
+
+This is a **rough, relative** estimate: no crit, enemy resistances, or the
+"Elemental"/multi-type conversion forms — good for comparing ranks/gear, not a
+true DPS. `--buffs` works as for `character`.
 
 More examples:
 
@@ -378,6 +423,43 @@ gd-explorer items --skill ""
 | `--char NAME` | Restrict to a character (matched against the location label) |
 | `--min-level N` / `--max-level N` | Bound the item's level requirement |
 | `--data-dir DIR` | Data root (default `data/gd-data`) |
+
+### `serve` — local web UI
+
+A browser front-end over the same data. The server loads the game database once
+(~3.5 s, ~1.5 GB) and keeps it resident; the small save data is re-read on every
+request, so the UI always reflects your latest play session without a restart.
+
+```sh
+# build the frontend once (outputs frontend/dist)
+npm --prefix frontend install
+npm --prefix frontend run build
+
+# run the server (serves the API + the built frontend)
+gd-explorer serve            # http://localhost:8080
+gd-explorer serve --port 9000 --data-dir data/gd-data --static frontend/dist
+```
+
+Three starting views:
+
+- **Sets** — a compact map of every item set, each cell coloured by completion;
+  click a set to see which pieces you own (and where) versus what's missing.
+- **Characters** — a summary card per character (level, class, hardcore, equipped
+  set-piece count).
+- **Character detail** — the gear a character has equipped, coloured by rarity
+  with resist / damage / skill bonuses.
+
+JSON endpoints (handy on their own): `GET /api/sets`, `GET /api/characters`,
+`GET /api/characters/:name`.
+
+**Frontend development.** The UI is a React + TypeScript + Vite app under
+`frontend/`. For live reload, run the Vite dev server (it proxies `/api` to the
+Haskell server on `:8080`):
+
+```sh
+gd-explorer serve              # terminal 1 — API on :8080
+npm --prefix frontend run dev  # terminal 2 — UI on :5173 (proxies to :8080)
+```
 
 ## How it works
 
