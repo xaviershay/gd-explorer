@@ -1,15 +1,20 @@
 # gd-explorer
 
-A read-only Haskell library + CLI for exploring [Grim Dawn](https://www.grimdawn.com/)
-save data. It parses the game database (`.arz`), localization (`.arc`), your
-characters (`.gdc`), and the shared transfer stash (`.gst`) to answer two
-questions across **all** your characters and the shared stash:
+Slopped up library for exploring 
+[Grim Dawn](https://www.grimdawn.com/)
+save data. Very messy. It parses the game database (`.arz`), localization (`.arc`), your
+characters (`.gdc`), and the shared transfer stash (`.gst`) to answer 
+questions across all your characters and the shared stash:
 
 1. **Set completion** — which set items you own and which you're missing.
 2. **Filterable inventory** — list items filtered by resistance, damage type,
    item slot, set membership, character, and level.
 
-It never writes save files.
+Can also show character stats, estimate DPS, and search for better gear.
+
+There is a CLI and a UI, both pretty nascent.
+
+This README is probably out of date.
 
 ## Data layout
 
