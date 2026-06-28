@@ -8,6 +8,7 @@ import GrimDawn.Aggregate (Location (..), OwnedItem (..))
 import GrimDawn.Arz (Value (..))
 import GrimDawn.Db (GameDb (..))
 import GrimDawn.Gdc (Character (..), Item (..))
+import GrimDawn.Report.Stats (Difficulty (..))
 import GrimDawn.Web.View
 import Test.Hspec
 
@@ -51,7 +52,7 @@ owned = [OwnedItem blankItem {itemBaseName = "m1"} SharedStash]
 
 hero :: Character
 hero =
-  Character "Hero" "tagClass" 50 True [blankItem {itemBaseName = "records/items/helm.dbr"}] [] [] [] 0 0 0
+  Character "Hero" "tagClass" 50 True [blankItem {itemBaseName = "records/items/helm.dbr"}] [] [] [] 0 0 0 0 0 []
 
 spec :: Spec
 spec = do
@@ -83,7 +84,7 @@ spec = do
       ("svOwnedCount" `isInfixOf` s) `shouldBe` False
 
   describe "detailView" $ do
-    let dv = detailView synthDb [] hero
+    let dv = detailView synthDb [] [] Ultimate hero
     it "carries character header and equipped gear" $ do
       cdvName dv `shouldBe` "Hero"
       cdvLevel dv `shouldBe` 50

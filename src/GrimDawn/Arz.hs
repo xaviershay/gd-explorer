@@ -10,11 +10,13 @@ module GrimDawn.Arz
   , RecordDb
   , LocalizationTable
   , loadArz
+  , listArzRecordNames
   , mergeDbs
   , lookupField
   , valueText
   , valueInt
   , valueFloat
+  , stripColorTags
   ) where
 
 import Control.Monad (replicateM)
@@ -130,7 +132,7 @@ parseRecordBody strs loc = go []
       | ty == 2 = do
           idx <- fromIntegral <$> word32
           let s = strs V.! idx
-          pure $ VString (resolveTag s)
+          pure $ VString (stripColorTags (resolveTag s))
       | otherwise = VInt <$> int32
 
     resolveTag s
@@ -159,7 +161,20 @@ decodeRecord _hdr strs loc raw rh = do
 -- record-name prefixes whose bodies we fully decode (items + the skill records
 -- that items' skill bonuses reference). Everything else is skipped.
 wantedPrefixes :: [Text]
-wantedPrefixes = ["records/items/", "records/skills/"]
+wantedPrefixes =
+  [ "records/items/"
+  , "records/skills/"
+  , "records/creatures/npcs/merchants/"
+  , "records/game/gamefactions"
+  ]
+
+-- | List every record name in an @.arz@ file without decoding any bodies.
+listArzRecordNames :: BS.ByteString -> Either String [Text]
+listArzRecordNames raw = do
+  hdr <- runGet readHeader raw
+  strs <- runGet (readStringTable (hStringTableStart hdr)) raw
+  rhs <- runGet (readRecordHeaders hdr strs) raw
+  pure (map rhName rhs)
 
 -- | Parse an @.arz@ file, decoding only the record bodies we need
 -- (see 'wantedPrefixes').
@@ -187,6 +202,20 @@ lookupField = HM.lookup
 valueText :: Value -> Maybe Text
 valueText (VString t) = Just t
 valueText _ = Nothing
+
+-- | Strip Grim Dawn's inline colour-control sequences (@^X@ where X is any
+-- single character, e.g. @^k@, @^o@, @^l@ used in @description@ fields to
+-- change colour mid-string).  These are display directives, not text, and leak
+-- as literal characters (e.g. @"^kMark of Dreeg"@) if left in.  Applied to
+-- every parsed VString so callers never have to remember.
+stripColorTags :: Text -> Text
+stripColorTags = go
+  where
+    go t = case T.break (== '^') t of
+      (a, b)
+        | T.null b -> a
+        | T.length b == 1 -> a -- trailing '^' with no code char
+        | otherwise -> a <> go (T.drop 2 b)
 
 valueInt :: Value -> Maybe Int32
 valueInt (VInt i) = Just i

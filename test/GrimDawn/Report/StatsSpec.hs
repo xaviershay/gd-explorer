@@ -35,7 +35,7 @@ mkSkillLvl :: T.Text -> Int -> Skill
 mkSkillLvl n lvl = Skill n (fromIntegral lvl) True 0 0 0 False False "" ""
 
 mkChar :: [Skill] -> Character
-mkChar sks = Character "Test" "" 100 False [] [] [] sks 0 0 0
+mkChar sks = Character "Test" "" 100 False [] [] [] sks 0 0 0 0 0 []
 
 -- the skill rows (excluding the synthetic bare "Weapon Attack" baseline)
 skillRows :: [AttackDps] -> [AttackDps]

@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+#
+# bin/serve — run the local web server, reusing the already-built binary so
+# normal `stack build` incremental output is used directly.
+#
+# Why not `stack run` / `stack exec`?  Both re-run configuration and can trigger
+# rebuilds when invoked with different flag combinations than the last build
+# (e.g. when --extra-lib-dirs differs).  Resolving the install-root once and
+# exec'ing the binary directly avoids any of that: if `stack build` produced a
+# binary, we run it as-is.
+#
+# Usage:
+#   bin/serve                 # builds (incrementally) then serves on $PORT (8080)
+#   bin/serve --port 9000     # extra args are forwarded to `gd-explorer serve`
+#   PORT=9090 bin/serve       # or set PORT in the environment
+#
+# Behaviour:
+#   - Always passes `--extra-lib-dirs=$BREW_LIB` to stack and `LD_LIBRARY_PATH`
+#     to the binary, matching the linuxbrew-libgmp workaround documented in
+#     AGENTS.md.  Both default to /var/home/linuxbrew/.linuxbrew/lib but can be
+#     overridden via $BREW_LIB.
+#   - Runs `stack build` and `npm --prefix frontend run build` first so both
+#     the binary and the frontend assets are up-to-date.  Add `--no-build` to
+#     skip both (useful when nothing has changed and you just want to restart).
+
+set -euo pipefail
+
+BREW_LIB=${BREW_LIB:-/var/home/linuxbrew/.linuxbrew/lib}
+PORT=${PORT:-8080}
+
+NO_BUILD=0
+FWD=()
+for arg in "$@"; do
+  case "$arg" in
+    --no-build) NO_BUILD=1 ;;
+    *) FWD+=("$arg") ;;
+  esac
+done
+
+if [ "$NO_BUILD" -eq 0 ]; then
+  stack build --extra-lib-dirs="$BREW_LIB"
+  npm --prefix frontend run build
+fi
+
+BIN="$(stack path --extra-lib-dirs="$BREW_LIB" --local-install-root)/bin/gd-explorer"
+if [ ! -x "$BIN" ]; then
+  echo "bin/serve: binary not found at $BIN (run without --no-build first)" >&2
+  exit 1
+fi
+
+# Forward any user args; if none specified a port, append the default.
+HAS_PORT=0
+for a in "${FWD[@]:-}"; do
+  case "$a" in --port|--port=*) HAS_PORT=1 ;; esac
+done
+if [ "$HAS_PORT" -eq 0 ]; then
+  FWD+=("--port" "$PORT")
+fi
+
+exec env LD_LIBRARY_PATH="$BREW_LIB" "$BIN" serve "${FWD[@]}"

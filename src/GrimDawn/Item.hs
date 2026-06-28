@@ -13,6 +13,7 @@ module GrimDawn.Item
   , setRecordName
   , itemAttrs
   , skillDisplayName
+  , stripColorTags
     -- * Bonus extractors (re-used for set bonuses)
   , resistBonuses
   , damageBonuses
@@ -26,6 +27,8 @@ module GrimDawn.Item
   , effectDisplay
   , damageElems
   , dotElems
+  , damageTable
+  , DamageRow (..)
   , resolveSetTier
     -- * Attribute vocabularies
   , resistTypes
@@ -40,7 +43,7 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import GrimDawn.Arz (Record, Value (..), lookupField, valueInt, valueText)
+import GrimDawn.Arz (Record, Value (..), lookupField, stripColorTags, valueInt, valueText)
 import GrimDawn.Db (GameDb, lookupRecord)
 import GrimDawn.Gdc (Item (..))
 
@@ -94,11 +97,12 @@ baseRecord it = lookupRecord (itemBaseName it)
 textField :: Text -> Record -> Maybe Text
 textField f r = lookupField f r >>= valueText
 
--- base display name: itemNameTag, else description with "^k" stripped.
+-- base display name: itemNameTag, else description (parsed strings have already
+-- had their colour-control codes stripped, see 'GrimDawn.Arz.stripColorTags').
 baseName :: Record -> Maybe Text
 baseName r =
   textField "itemNameTag" r
-    `orElse` (T.replace "^k" "" <$> textField "description" r)
+    `orElse` textField "description" r
 
 qualityName :: Record -> Maybe Text
 qualityName r = textField "itemQualityTag" r `orElse` textField "itemStyleTag" r
@@ -386,6 +390,45 @@ damageBonuses related =
       , p > 0
       ]
 
+-- | Per-damage-type aggregation suitable for a summary table: instant flat
+-- range, instant % bonus, DoT per-second flat range, and DoT % bonus.
+-- The DoT flat range is "per second" — the natural per-source value summed
+-- across sources (i.e. each source's total-divided-by-its-duration), without
+-- any expected-value averaging across the (lo, hi) range.
+data DamageRow = DamageRow
+  { drType :: !Text
+  , drInstFlat :: !(Double, Double)
+  , drInstPct :: !Double
+  , drDotFlat :: !(Double, Double)
+  , drDotPct :: !Double
+  }
+  deriving (Show, Eq)
+
+-- | Build the per-damage-type table across the given related records. Includes
+-- only rows that have at least one non-zero value. Iterated in 'damageElems'
+-- order, with display names rendered via 'effectDisplay' (so e.g. the @Poison@
+-- stem appears as "Acid").
+damageTable :: [(Text, Record)] -> [DamageRow]
+damageTable related =
+  [ DamageRow
+      { drType = effectDisplay ["offensive"] tok
+      , drInstFlat = (instLo, instHi)
+      , drInstPct = instPct
+      , drDotFlat = (dotLo, dotHi)
+      , drDotPct = dotPct
+      }
+  | (stem, tok) <- damageElems
+  , let (instLo, instHi) =
+          sumRange related ["offensive", "offensiveBase", "offensiveBonus"] stem
+        instPct = sumField related ("offensive" <> stem <> "Modifier")
+        hasDot = stem `elem` map fst dotElems
+        (dotLo, dotHi) =
+          if hasDot then sumRange related ["offensiveSlow"] stem else (0, 0)
+        dotPct =
+          if hasDot then sumField related ("offensiveSlow" <> stem <> "Modifier") else 0
+  , instHi > 0 || instPct > 0 || dotHi > 0 || dotPct > 0
+  ]
+
 --------------------------------------------------------------------------------
 -- Character / defensive / utility bonuses
 --------------------------------------------------------------------------------
@@ -664,4 +707,3 @@ itemAttrs it db =
     related = relatedRecords it db
     base = baseRecord it db
     cls = base >>= textField "Class"
-

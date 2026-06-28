@@ -18,6 +18,7 @@ import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.List (find, nub)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
@@ -38,8 +39,9 @@ import GrimDawn.Arc (loadArchiveFile)
 import GrimDawn.Db (GameDb, loadGameDb)
 import GrimDawn.Gdc (Character (..), itemWithName)
 import GrimDawn.Item (iaBitmap, itemAttrs)
+import GrimDawn.Report.Stats (Difficulty (..), parseDifficulty)
 import GrimDawn.Web.Texture (decodeTexture)
-import GrimDawn.Web.View (GearOverride (..), detailView, enhancementCatalog, rankEnhancements, setsView, summaryView)
+import GrimDawn.Web.View (GearOverride (..), detailView, enhancementCatalog, rankEnhancements, rankItems, setsView, summaryView)
 
 data ServeOpts = ServeOpts
   { soPort :: !Int
@@ -86,9 +88,11 @@ routes db texCache opts = do
   get "/api/characters/:name" $ do
     name <- pathParam "name"
     overrides <- parseOverrides . queryString <$> request
+    diff <- difficultyParam
     chars <- loadOr (loadCharacters (soDataDir opts))
+    owned <- loadOr (loadOwnedItems (soDataDir opts))
     case findChar name chars of
-      Just c -> json (detailView db overrides c)
+      Just c -> json (detailView db owned overrides diff c)
       Nothing -> do
         status status404
         text ("no character named " <> TL.fromStrict name)
@@ -102,9 +106,26 @@ routes db texCache opts = do
     slot <- queryParam "slot"
     kind <- queryParam "kind"
     overrides <- parseOverrides . queryString <$> request
+    diff <- difficultyParam
     chars <- loadOr (loadCharacters (soDataDir opts))
     case findChar name chars of
-      Just c -> json (rankEnhancements db overrides slot kind c)
+      Just c -> json (rankEnhancements db overrides diff slot kind c)
+      Nothing -> do
+        status status404
+        text ("no character named " <> TL.fromStrict name)
+
+  -- Alternate owned items for a gear slot, scored by the `upgrades` path (the
+  -- candidate inherits the slot's component/augment). Best-first, only items that
+  -- improve on the current one; each carries its location (character/stash).
+  get "/api/characters/:name/items" $ do
+    name <- pathParam "name"
+    slot <- queryParam "slot"
+    overrides <- parseOverrides . queryString <$> request
+    diff <- difficultyParam
+    chars <- loadOr (loadCharacters (soDataDir opts))
+    owned <- loadOr (loadOwnedItems (soDataDir opts))
+    case findChar name chars of
+      Just c -> json (rankItems db owned overrides diff slot c)
       Nothing -> do
         status status404
         text ("no character named " <> TL.fromStrict name)
@@ -140,12 +161,15 @@ loadOr act = do
 findChar :: Text -> [Character] -> Maybe Character
 findChar name = find ((== T.toLower name) . T.toLower . charName)
 
--- | Parse @comp.<i>@ / @aug.<i>@ query params into per-slot gear overrides. A
--- value of @none@ clears the slot; any other value sets that component/augment
--- record; an absent param leaves the slot's original attachment in place.
+-- | Parse @item.<i>@ / @comp.<i>@ / @aug.<i>@ query params into per-slot gear
+-- overrides. @item@ swaps the slot's base item (inheriting its component/augment);
+-- @comp@/@aug@ swap the attachment. A value of @none@ clears it; any other value
+-- sets that record; an absent param leaves the slot's original in place.
 parseOverrides :: [(BS.ByteString, Maybe BS.ByteString)] -> [GearOverride]
 parseOverrides qs =
-  [GearOverride i (lookup i comps) (lookup i augs) | i <- nub (map fst comps ++ map fst augs)]
+  [ GearOverride i (lookup i items) (lookup i comps) (lookup i augs)
+  | i <- nub (map fst items ++ map fst comps ++ map fst augs)
+  ]
   where
     decoded = [(TE.decodeUtf8 k, maybe "" TE.decodeUtf8 v) | (k, v) <- qs]
     pick pre =
@@ -154,8 +178,18 @@ parseOverrides qs =
       , Just rest <- [T.stripPrefix pre k]
       , Just i <- [readMaybe (T.unpack rest)]
       ]
+    items = pick "item."
     comps = pick "comp."
     augs = pick "aug."
+
+-- | The optional @?difficulty=normal|elite|ultimate@ query parameter, defaulting
+-- to Ultimate (the canonical end-game view used by the @character@ CLI report).
+difficultyParam :: ActionM Difficulty
+difficultyParam = do
+  qs <- queryString <$> request
+  pure $ case lookup "difficulty" qs of
+    Just (Just v) -> fromMaybe Ultimate (parseDifficulty (T.unpack (TE.decodeUtf8 v)))
+    _ -> Ultimate
 
 -- | Normalise an item's @bitmap@ path to its archive key. Records reference
 -- textures as @items/<...>.tex@, but @Items.arc@ stores them without the leading

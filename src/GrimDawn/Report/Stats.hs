@@ -15,6 +15,7 @@ module GrimDawn.Report.Stats
   , skillSources
   , overlay
   , overlayAt
+  , inheritGear
   , renderStats
   , renderStatsDiff
   , StatSummary (..)
@@ -41,7 +42,7 @@ module GrimDawn.Report.Stats
 
 import Data.Char (isDigit, isLower, toLower)
 import qualified Data.HashMap.Strict as HM
-import Data.List (intercalate, nub, nubBy, sortOn)
+import Data.List (find, intercalate, nub, nubBy, sortOn)
 import Data.Maybe (listToMaybe)
 import Text.Read (readMaybe)
 import Data.Text (Text)
@@ -52,6 +53,8 @@ import GrimDawn.Gdc (Character (..), Item (..), Skill (..), emptyItemName)
 import GrimDawn.Item
   ( damageElems
   , damageBonuses
+  , damageTable
+  , DamageRow (..)
   , dotElems
   , effectDisplay
   , itemAttrs
@@ -383,7 +386,10 @@ data StatSummary = StatSummary
   { ssResists :: ![(Text, Double, Double, Double)]
   , ssAttributes :: ![(Text, Double)]
   , ssKeyTotals :: ![(Text, Double, Double)]
+  , ssHealthTotal :: !Double -- computed max Health (bio base + attrs + gear/buffs)
+  , ssEnergyTotal :: !Double -- computed max Energy
   , ssDamage :: ![Text] -- total damage bonuses (e.g. "+120% Acid"), gear + buffs
+  , ssDamageTable :: ![DamageRow] -- per-damage-type table: instant + DoT flat & %
   }
   deriving (Show, Eq)
 
@@ -391,15 +397,37 @@ statSummary :: Difficulty -> Character -> [(Text, Record)] -> StatSummary
 statSummary diff c sources =
   StatSummary
     { ssResists = resistRows diff sources
-    , ssAttributes =
-        [ (label, (baseV + sumField sources flatField) * (1 + sumField sources pctField / 100))
-        | (label, baseV, flatField, pctField) <- attrFieldsOf c
-        ]
+    , ssAttributes = attrTotals
     , ssKeyTotals =
         [ row | row@(label, _, _) <- keyTotalsOf sources, label `notElem` ["Physique", "Cunning", "Spirit"]
         ]
+    , ssHealthTotal = healthTotal
+    , ssEnergyTotal = energyTotal
     , ssDamage = damageBonuses sources
+    , ssDamageTable = damageTable sources
     }
+  where
+    attrTotals =
+      [ (label, (baseV + sumField sources flatField) * (1 + sumField sources pctField / 100))
+      | (label, baseV, flatField, pctField) <- attrFieldsOf c
+      ]
+    totalAttr label = maybe 0 snd (find ((== label) . fst) attrTotals)
+    -- Health/Energy are derived, not stored as live totals: the bio block keeps
+    -- only the attribute-derived base (charHealth/charEnergy). Add the health/
+    -- energy from attributes gained beyond the bio base (mastery/gear/devotion),
+    -- plus flat +Health/+Energy, then scale by the % modifier. Per-attribute
+    -- rates are GD's published constants (see [[gd-stats-and-factions]] notes).
+    bonusHealth =
+      (totalAttr "Physique" - charPhysique c) * 2.5
+        + (totalAttr "Cunning" - charCunning c) * 1.0
+        + (totalAttr "Spirit" - charSpirit c) * 1.0
+    bonusEnergy = (totalAttr "Spirit" - charSpirit c) * 2.0
+    healthTotal =
+      (charHealth c + bonusHealth + sumField sources "characterLife")
+        * (1 + sumField sources "characterLifeModifier" / 100)
+    energyTotal =
+      (charEnergy c + bonusEnergy + sumField sources "characterMana")
+        * (1 + sumField sources "characterManaModifier" / 100)
 
 --------------------------------------------------------------------------------
 -- Rendering

@@ -1,4 +1,4 @@
-import { BonusItem, orderedResists, ResistEntry, ResistRow } from "./elements";
+import { BonusItem, orderedResists, ResistEntry, ResistRow, ResistTable } from "./elements";
 
 // Stat bonuses grouped for display, matching the set view's "Combined totals":
 // resistances summarised as icons, everything else bucketed into these groups.
@@ -138,21 +138,28 @@ function fmtStat(s: Stat): string {
   return `+${val}${s.percent ? "%" : ""} ${s.label}`;
 }
 
-// Render grouped bonuses: a resistance icon row then the non-empty groups.
-// `inlineResists` lays the resist chips out inline (for compact item cards)
-// rather than the fixed grid used by the set summary.
+// Render grouped bonuses: a resistance summary then the non-empty groups.
+// `resistTable` shows the fixed 2×5 grid with absent types greyed (equipped
+// gear, for a consistent layout); otherwise `inlineResists` chooses the compact
+// inline chips vs. the set-summary fixed row.
 export function GroupedStats({
   resists,
   groups,
   inlineResists = false,
+  resistTable = false,
 }: {
   resists: ResistEntry[];
   groups: Record<Group, string[]>;
   inlineResists?: boolean;
+  resistTable?: boolean;
 }) {
   return (
     <>
-      {resists.length > 0 && <ResistRow entries={resists} inline={inlineResists} />}
+      {resistTable ? (
+        <ResistTable entries={resists} />
+      ) : (
+        resists.length > 0 && <ResistRow entries={resists} inline={inlineResists} />
+      )}
       {GROUP_ORDER.filter((g) => groups[g].length > 0).map((g) => (
         <div className="total-group" key={g}>
           <div className="total-group-head">{GROUP_LABEL[g]}</div>

@@ -73,6 +73,9 @@ char =
     , charPhysique = 0
     , charCunning = 0
     , charSpirit = 0
+    , charHealth = 0
+    , charEnergy = 0
+    , charFactions = []
     }
 
 spec :: Spec

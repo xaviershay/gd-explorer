@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Enhancement } from "../api";
+import { Enhancement, RankEntry } from "../api";
 import { rarityColor } from "../colors";
 import {
     Element,
@@ -31,6 +31,41 @@ const linesOf = (e: Enhancement) => [
     ...e.skillBonuses,
 ];
 
+// Stat lines grouped and labelled by category, so it's obvious at a glance
+// which numbers are resistances, damage, etc. — the underlying data already
+// arrives split, we just render each group with a small leading tag.
+const STAT_GROUPS: { key: keyof Enhancement; label: string }[] = [
+    { key: "resistBonuses", label: "RES" },
+    { key: "damageBonuses", label: "DMG" },
+    { key: "bonuses", label: "STAT" },
+    { key: "skillBonuses", label: "SKILL" },
+];
+
+function GroupedLines({ e }: { e: Enhancement }) {
+    return (
+        <>
+            {STAT_GROUPS.map(({ key, label }) => {
+                const lines = e[key] as string[];
+                if (lines.length === 0) return null;
+                return (
+                    <div key={key} className="enh-group">
+                        <span className="enh-group-label muted">{label}</span>
+                        {lines.map((l, i) => (
+                            <span
+                                key={i}
+                                className="dtype"
+                                style={{ color: elementColor(l) }}
+                            >
+                                {l}
+                            </span>
+                        ))}
+                    </div>
+                );
+            })}
+        </>
+    );
+}
+
 // Filter by free text (name or any stat line) and by required elements (a stat
 // must mention one of the selected damage/resistance types).
 function matches(e: Enhancement, query: string, elems: Set<Element>): boolean {
@@ -56,9 +91,12 @@ function matches(e: Enhancement, query: string, elems: Set<Element>): boolean {
 
 // Reorder @items@ by their position in @order@ (a record list, best-first).
 // Items missing from @order@ are appended in their original order.
-function sortByRanking(items: Enhancement[], order: string[]): Enhancement[] {
+function sortByRanking(
+    items: Enhancement[],
+    order: RankEntry[],
+): Enhancement[] {
     const rank = new Map<string, number>();
-    order.forEach((r, i) => rank.set(r, i));
+    order.forEach((r, i) => rank.set(r.record, i));
     const known = items.filter((o) => rank.has(o.record));
     const unknown = items.filter((o) => !rank.has(o.record));
     known.sort((a, b) => rank.get(a.record)! - rank.get(b.record)!);
@@ -83,12 +121,12 @@ export function EnhancementPicker({
     current: string | null;
     options: Enhancement[];
     onChange: (record: string) => void;
-    fetchRanking?: () => Promise<string[]>;
+    fetchRanking?: () => Promise<RankEntry[]>;
 }) {
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState("");
     const [elems, setElems] = useState<Set<Element>>(new Set());
-    const [ranking, setRanking] = useState<string[] | null>(null);
+    const [ranking, setRanking] = useState<RankEntry[] | null>(null);
     const ref = useRef<HTMLDivElement>(null);
 
     // Drop any cached ranking when the fetcher's identity changes (e.g. when the
@@ -130,12 +168,15 @@ export function EnhancementPicker({
     }, [open]);
 
     const sel = options.find((o) => o.record === current);
-    const curLines = sel ? linesOf(sel) : [];
     const q = query.trim().toLowerCase();
     const filtered = options.filter((o) => matches(o, q, elems));
     // When a ranking has arrived, sort by it (best first); records not in the
     // ranking (shouldn't normally happen) sort after, preserving relative order.
     const ranked = ranking ? sortByRanking(filtered, ranking) : filtered;
+    // Upgrade score for each option (best-first list), shown alongside its row.
+    const scoreOf = ranking
+        ? new Map(ranking.map((r) => [r.record, r.score]))
+        : null;
 
     const choose = (record: string) => {
         onChange(record);
@@ -183,17 +224,9 @@ export function EnhancementPicker({
                 )}
             </div>
 
-            {curLines.length > 0 && (
+            {sel && (
                 <div className="enh-stats">
-                    {curLines.map((l, i) => (
-                        <span
-                            key={i}
-                            className="dtype"
-                            style={{ color: elementColor(l) }}
-                        >
-                            {l}
-                        </span>
-                    ))}
+                    <GroupedLines e={sel} />
                 </div>
             )}
 
@@ -239,28 +272,33 @@ export function EnhancementPicker({
                             >
                                 <ItemImage record={o.record} />
                                 <div className="enh-option-body">
-                                    <div
-                                        className="enh-option-name"
-                                        style={{
-                                            color: rarityColor(
-                                                o.classification,
-                                            ),
-                                        }}
-                                    >
-                                        {o.name}
+                                    <div className="enh-option-head">
+                                        <span
+                                            className="enh-option-name"
+                                            style={{
+                                                color: rarityColor(
+                                                    o.classification,
+                                                ),
+                                            }}
+                                        >
+                                            {o.name}
+                                        </span>
+                                        {scoreOf && scoreOf.has(o.record) && (
+                                            <span
+                                                className="enh-score"
+                                                title="upgrade score (higher is better)"
+                                            >
+                                                {scoreOf.get(o.record)! > 0
+                                                    ? "+"
+                                                    : ""}
+                                                {Math.round(
+                                                    scoreOf.get(o.record)!,
+                                                ).toLocaleString()}
+                                            </span>
+                                        )}
                                     </div>
                                     <div className="enh-option-stats">
-                                        {linesOf(o).map((l, i) => (
-                                            <span
-                                                key={i}
-                                                className="dtype"
-                                                style={{
-                                                    color: elementColor(l),
-                                                }}
-                                            >
-                                                {l}
-                                            </span>
-                                        ))}
+                                        <GroupedLines e={o} />
                                     </div>
                                 </div>
                             </li>

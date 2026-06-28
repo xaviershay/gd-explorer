@@ -16,43 +16,53 @@ module GrimDawn.Web.View
   , ResistView (..)
   , NamedValueView (..)
   , KeyTotalView (..)
+  , DamageRowView (..)
   , AttackView (..)
   , EnhancementView (..)
   , CatalogView (..)
   , ShoppingView (..)
   , GearOverride (..)
+  , SkillEntryView (..)
+  , MasteryView (..)
+  , ConstellationView (..)
   , setsView
   , summaryView
   , detailView
   , enhancementCatalog
   , rankEnhancements
+  , RankView (..)
+  , rankItems
+  , ItemRankView (..)
   ) where
 
 import Data.Aeson (Options (..), ToJSON (..), defaultOptions, genericToJSON)
-import Data.Char (isUpper, toLower)
+import Data.Char (isDigit, isUpper, toLower)
 import qualified Data.HashMap.Strict as HM
-import Data.List (nub, sortOn)
-import Data.Maybe (fromMaybe)
+import Data.List (nub, nubBy, sortOn)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics (Generic)
 
-import GrimDawn.Aggregate (OwnedItem)
-import GrimDawn.Arz (Record, Value (..), valueText)
+import GrimDawn.Aggregate (OwnedItem (..), locationLabel)
+import GrimDawn.Arz (Record, RecordDb, Value (..), valueText)
 import GrimDawn.Db (GameDb (..), lookupRecord)
 import GrimDawn.Gdc
   ( Character (..)
   , Item (..)
+  , Skill (..)
   , emptyItemName
   , itemWithName
   )
 import GrimDawn.Item
   ( ItemAttrs (..)
+  , DamageRow (..)
   , characterBonuses
   , damageBonuses
   , itemAttrs
   , resistBonuses
   , skillBonuses
+  , skillDisplayName
   )
 import GrimDawn.Report.Sets
   ( SetCompletion (..)
@@ -75,6 +85,7 @@ import GrimDawn.Report.Stats
   , defaultUpgradeTarget
   , defaultWeights
   , devotionSources
+  , inheritGear
   , masterySources
   , mkScoreBase
   , scoreItems
@@ -242,6 +253,8 @@ data CharacterDetailView = CharacterDetailView
   , cdvAttacks :: ![AttackView] -- per-attack/proc DPS estimate
   , cdvGear :: ![GearView]
   , cdvShopping :: ![ShoppingView] -- components/augments selected that aren't on the saved character
+  , cdvMasteries :: ![MasteryView] -- invested mastery bars + skills
+  , cdvDevotions :: ![ConstellationView] -- taken devotion constellations
   }
   deriving (Show, Eq, Generic)
 
@@ -254,11 +267,46 @@ data ShoppingView = ShoppingView
   , shopName :: !Text
   , shopKind :: !Text -- "component" | "augment"
   , shopSource :: !(Maybe Text) -- faction/shop hint, when known
+  , shopStanding :: !(Maybe Text) -- minimum faction standing required (augments only)
   , shopCount :: !Int
+  , shopSlots :: ![Text] -- gear slot type for each instance (e.g. ["ring", "waist"])
   }
   deriving (Show, Eq, Generic)
 
 instance ToJSON ShoppingView where toJSON = genericToJSON opts
+
+-- | A single invested skill within a mastery.
+data SkillEntryView = SkillEntryView
+  { sevName :: !Text
+  , sevRank :: !Int
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON SkillEntryView where toJSON = genericToJSON opts
+
+-- | A mastery bar with its invested rank and all skills the character has
+-- put points into within that mastery.
+data MasteryView = MasteryView
+  { mastName :: !Text
+  , mastRank :: !Int
+  , mastSkills :: ![SkillEntryView]
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON MasteryView where toJSON = genericToJSON opts
+
+-- | One completed (or partial) devotion constellation: its display name, how
+-- many stars are taken, the name of the granted celestial power (if any), and
+-- the aggregate stat bonuses from the taken passive stars.
+data ConstellationView = ConstellationView
+  { conName :: !Text
+  , conStars :: !Int
+  , conPower :: !(Maybe Text)
+  , conBonuses :: ![Text]
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON ConstellationView where toJSON = genericToJSON opts
 
 -- | The character's effective stats (gear + devotions + mastery + always-on
 -- buffs), folded for the difficulty noted in @ssvDifficulty@.
@@ -266,12 +314,30 @@ data StatSummaryView = StatSummaryView
   { ssvDifficulty :: !Text
   , ssvResists :: ![ResistView]
   , ssvAttributes :: ![NamedValueView] -- Physique/Cunning/Spirit absolute totals
-  , ssvKeyTotals :: ![KeyTotalView] -- OA, DA, Armor, Health, Energy, ...
+  , ssvKeyTotals :: ![KeyTotalView] -- OA, DA, Armor, ... (contribution figures)
+  , ssvHealth :: !Double -- computed max Health total
+  , ssvEnergy :: !Double -- computed max Energy total
   , ssvDamage :: ![Text] -- total damage bonuses (e.g. "+120% Acid")
+  , ssvDamageTable :: ![DamageRowView] -- per-damage-type table
   }
   deriving (Show, Eq, Generic)
 
 instance ToJSON StatSummaryView where toJSON = genericToJSON opts
+
+-- | One row of the per-damage-type breakdown shown in the summary card.
+-- DoT flat values are per-second (sum of each source's total/duration).
+data DamageRowView = DamageRowView
+  { drvType :: !Text
+  , drvInstFlatLo :: !Double
+  , drvInstFlatHi :: !Double
+  , drvInstPct :: !Double
+  , drvDotFlatLo :: !Double
+  , drvDotFlatHi :: !Double
+  , drvDotPct :: !Double
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON DamageRowView where toJSON = genericToJSON opts
 
 data ResistView = ResistView
   { rvName :: !Text
@@ -348,18 +414,21 @@ summaryView db c =
   where
     attrs = map (`itemAttrs` db) (equippedItems c)
 
--- | A what-if substitution of an equipped item's component and/or augment,
--- addressed by its index into the (non-empty) equipped-gear list. 'Nothing'
--- keeps the original; @Just ""@ clears the slot; @Just record@ sets it.
+-- | A what-if substitution of an equipped item's base, component, and/or
+-- augment, addressed by its index into the (non-empty) equipped-gear list.
+-- 'Nothing' keeps the original; @Just ""@ clears the slot/component/augment;
+-- @Just record@ swaps in that record. When 'goItem' is set, the slot's saved
+-- component\/augment are inherited (overridable via 'goComponent'/'goAugment').
 data GearOverride = GearOverride
   { goIndex :: !Int
+  , goItem :: !(Maybe Text)
   , goComponent :: !(Maybe Text)
   , goAugment :: !(Maybe Text)
   }
   deriving (Show, Eq)
 
-detailView :: GameDb -> [GearOverride] -> Character -> CharacterDetailView
-detailView db overrides c =
+detailView :: GameDb -> [OwnedItem] -> [GearOverride] -> Difficulty -> Character -> CharacterDetailView
+detailView db owned overrides difficulty c =
   CharacterDetailView
     { cdvName = charName c
     , cdvLevel = fromIntegral (charLevel c)
@@ -368,17 +437,21 @@ detailView db overrides c =
     , cdvSummary = toSummaryView difficulty (statSummary difficulty c sources)
     , cdvAttacks = map toAttackView (attackDps db sources c)
     , cdvGear = map gearViewOf items
-    , cdvShopping = shoppingList db (equippedItems c) items
+    , cdvShopping = shoppingList db c owned (map slotTypeOf items) (equippedItems c) items
+    , cdvMasteries = buildMasteries db c
+    , cdvDevotions = buildDevotions db c
     }
   where
     -- The effective equipped set after applying any component/augment overrides;
     -- both the stat sources and the gear cards are built from it so they agree.
-    items = applyOverrides overrides (equippedItems c)
+    items = applyOverrides db overrides (equippedItems c)
     gearViewOf it = toGearView (itemBaseName it) (nonEmpty (itemRelicName it)) (nonEmpty (itemAugmentName it)) (itemAttrs it db)
-    -- Effective stat sources, mirroring the `character`/`dps` CLI commands but
-    -- folding in always-on (permanent) buffs and reporting at Ultimate, where
-    -- the -50% resistance penalty makes the resist check meaningful.
-    difficulty = Ultimate
+    slotTypeOf it = iaType (itemAttrs it db)
+    -- Effective stat sources, mirroring the `character`/`dps` CLI commands and
+    -- folding in always-on (permanent) buffs.  Difficulty is supplied by the
+    -- caller; Ultimate is the canonical end-game view (its -50% resist penalty
+    -- makes the resist check meaningful) but Normal/Elite are useful when
+    -- planning a lower-level character.
     permanentBuffs = BuffToggle True False False
     nonSkill = statSources db items ++ devotionSources db c ++ masterySources db c
     extra = devotionSources db c ++ masterySources db c ++ skillSources permanentBuffs nonSkill db c
@@ -387,53 +460,223 @@ detailView db overrides c =
 nonEmpty :: Text -> Maybe Text
 nonEmpty t = if T.null t then Nothing else Just t
 
--- | Apply component/augment overrides to the equipped items by position.
-applyOverrides :: [GearOverride] -> [Item] -> [Item]
-applyOverrides overrides = zipWith apply [0 ..]
+-- | Apply gear overrides (base item, component, augment) by position. When a
+-- base item is swapped, the original slot's component/augment are inherited
+-- before any explicit component/augment overrides are applied on top.
+applyOverrides :: GameDb -> [GearOverride] -> [Item] -> [Item]
+applyOverrides _db overrides = zipWith apply [0 ..]
   where
     byIndex = HM.fromList [(goIndex o, o) | o <- overrides]
     apply i it = maybe it (`applyOverride` it) (HM.lookup i byIndex)
     applyOverride o it =
-      it
-        { itemRelicName = fromMaybe (itemRelicName it) (goComponent o)
-        , itemAugmentName = fromMaybe (itemAugmentName it) (goAugment o)
-        }
+      let swapped = case goItem o of
+            Just newRec | not (T.null newRec) -> inheritGear it (itemWithName newRec)
+            _ -> it
+       in swapped
+            { itemRelicName = fromMaybe (itemRelicName swapped) (goComponent o)
+            , itemAugmentName = fromMaybe (itemAugmentName swapped) (goAugment o)
+            }
 
--- | The components/augments the effective build uses that the saved character
--- does not (counted), with a faction/shop hint for augments.
-shoppingList :: GameDb -> [Item] -> [Item] -> [ShoppingView]
-shoppingList db origs effs =
-  [toShop kind rec (length (filter (== (kind, rec)) changes)) | (kind, rec) <- nub changes]
+-- | The components/augments/items the effective build uses that the saved
+-- character does not (counted). Augments include a faction-vendor hint;
+-- items include a location hint (which character/stash holds the candidate).
+shoppingList :: GameDb -> Character -> [OwnedItem] -> [Maybe Text] -> [Item] -> [Item] -> [ShoppingView]
+shoppingList db c owned slots origs effs =
+  [ toShop kind rec [s | (k, r, s) <- changes, k == kind, r == rec]
+  | (kind, rec) <- nub [(k, r) | (k, r, _) <- changes]
+  , canBuy kind rec
+  ]
   where
-    changes = concat (zipWith diff origs effs)
-    diff o e =
-      [("component", r) | let r = itemRelicName e, not (T.null r), r /= itemRelicName o]
-        ++ [("augment", r) | let r = itemAugmentName e, not (T.null r), r /= itemAugmentName o]
-    toShop kind rec n =
-      ShoppingView
-        { shopRecord = rec
-        , shopName = fromMaybe (T.takeWhileEnd (/= '/') rec) (lookupRecord rec db >>= HM.lookup "description" >>= valueText)
-        , shopKind = kind
-        , shopSource = if kind == "augment" then augmentFaction db rec else Nothing
-        , shopCount = n
+    shopMap = buildFactionShopMap (gdbRecords db)
+    charStandings = buildCharFactionStandings db c
+    canBuy "augment" rec = case HM.lookup rec shopMap of
+      Just (faction, reqTier) ->
+        case HM.lookup faction charStandings of
+          Just charTier -> standingRank charTier >= standingRank reqTier
+          Nothing -> False  -- faction not unlocked / below Friendly
+      Nothing -> True  -- not a faction augment (or unknown source), include it
+    canBuy _ _ = True
+    changes = concat (zipWith3 diff slots origs effs)
+    diff slot o e =
+      let itemChanged = not (T.null (itemBaseName e)) && itemBaseName e /= itemBaseName o
+       in [("item", r, slot) | let r = itemBaseName e, not (T.null r), r /= itemBaseName o]
+            ++ [("component", r, slot) | let r = itemRelicName e, not (T.null r), r /= itemRelicName o || itemChanged]
+            ++ [("augment", r, slot) | let r = itemAugmentName e, not (T.null r), r /= itemAugmentName o || itemChanged]
+    nameForItem rec =
+      let attrs = itemAttrs (itemWithName rec) db
+       in iaDisplayName attrs
+    locationForItem rec =
+      case [oiLocation oi | oi <- owned, itemBaseName (oiItem oi) == rec] of
+        (loc : _) -> Just (locationLabel loc)
+        [] -> Nothing
+    toShop kind rec slotList =
+      let (src, standing) = case kind of
+            "augment" -> case HM.lookup rec shopMap of
+              Just (faction, tier) -> (Just faction, Just tier)
+              Nothing -> (augmentFaction db rec, Nothing)
+            "item" -> (locationForItem rec, Nothing)
+            _ -> (Nothing, Nothing)
+       in ShoppingView
+            { shopRecord = rec
+            , shopName = case kind of
+                "item" -> nameForItem rec
+                _ -> fromMaybe (T.takeWhileEnd (/= '/') rec) (lookupRecord rec db >>= HM.lookup "description" >>= valueText)
+            , shopKind = kind
+            , shopSource = src
+            , shopStanding = standing
+            , shopCount = length slotList
+            , shopSlots = [s | Just s <- slotList]
+            }
+
+-- | Build mastery groups from the character's skill list. Each mastery bar
+-- becomes a 'MasteryView' with its invested rank and the skills the character
+-- has put points into within that mastery.
+buildMasteries :: GameDb -> Character -> [MasteryView]
+buildMasteries db c = map renderMastery masteryBars
+  where
+    classSkills = [s | s <- charSkills c, "records/skills/playerclass" `T.isPrefixOf` skName s]
+    masteryBars = [s | s <- classSkills, "_classtraining_" `T.isInfixOf` skName s]
+    normalSkills = [s | s <- classSkills, not ("_classtraining_" `T.isInfixOf` skName s), skLevel s > 0]
+    renderMastery bar =
+      MasteryView
+        { mastName = skillDisplayName db (skName bar)
+        , mastRank = fromIntegral (skLevel bar)
+        , mastSkills =
+            [ SkillEntryView (skillDisplayName db (skName s)) (fromIntegral (skLevel s))
+            | s <- normalSkills
+            , classSegment (skName s) == classSegment (skName bar)
+            ]
         }
+    classSegment p = case filter ("playerclass" `T.isPrefixOf`) (T.splitOn "/" p) of
+      (x : _) -> x
+      [] -> ""
+
+-- | Build constellation views from the character's devotion stars.
+buildDevotions :: GameDb -> Character -> [ConstellationView]
+buildDevotions db c = map renderConstellation constellations
+  where
+    devStars = [s | s <- charSkills c, "/devotion/tier" `T.isInfixOf` skName s]
+    constKey s =
+      let leaf = last (T.splitOn "/" (skName s))
+          base = T.dropEnd 4 leaf
+       in case T.splitOn "_" base of
+            (a : b : _) -> a <> "_" <> T.takeWhile isDigit b
+            _ -> base
+    isPower s = "_skill" `T.isSuffixOf` T.dropEnd 4 (last (T.splitOn "/" (skName s)))
+    constellations = foldl (\acc s -> if constKey s `elem` acc then acc else acc ++ [constKey s]) [] devStars
+    renderConstellation k =
+      let grp = [s | s <- devStars, constKey s == k]
+          passives = filter (not . isPower) grp
+          name = case passives of
+            (s : _) -> skillDisplayName db (skName s)
+            [] -> maybe "?" (skillDisplayName db . skName) (listToMaybe grp)
+          power = listToMaybe (nub [skillDisplayName db (skName s) | s <- grp, isPower s])
+          related = [(skName s, r) | s <- passives, Just r <- [lookupRecord (skName s) db]]
+          bonuses = resistBonuses related ++ damageBonuses related ++ characterBonuses related
+       in ConstellationView
+            { conName = name
+            , conStars = length grp
+            , conPower = power
+            , conBonuses = bonuses
+            }
+
+-- | Map reputation value to in-game standing tier name.
+-- In-game order (lowest→highest positive): Friendly < Respected < Honored < Revered.
+-- Thresholds: Friendly 1500, Respected 5000, Honored 10000, Revered 25000 (cap).
+standingTierOf :: Float -> Text
+standingTierOf v
+  | v >= 25000 = "Revered"
+  | v >= 10000 = "Honored"
+  | v >= 5000  = "Respected"
+  | v >= 1500  = "Friendly"
+  | otherwise  = ""
+
+standingRank :: Text -> Int
+standingRank "Friendly"  = 1
+standingRank "Respected" = 2
+standingRank "Honored"   = 3
+standingRank "Revered"   = 4
+standingRank _           = 0
+
+-- | Map from faction display name → current standing tier for this character.
+-- Uses gd-edit's 1-based faction index scheme (array index 0 = faction 1 =
+-- Devil's Crossing; array index N ≥ 5 → faction UserN-5).
+buildCharFactionStandings :: GameDb -> Character -> HM.HashMap Text Text
+buildCharFactionStandings db c =
+  HM.fromList
+    [ (name, tier)
+    | (i, val) <- zip [1 ..] (charFactions c)
+    , Just name <- [factionNameByIndex i]
+    , let tier = standingTierOf val
+    , not (T.null tier)
+    ]
+  where
+    factionNameByIndex 1 = Just "Devil's Crossing"
+    factionNameByIndex i
+      | i >= 6 = factionName ("User" <> T.pack (show (i - 6)))
+    factionNameByIndex _ = Nothing
+
+-- | Map from augment record name → (faction display name, minimum standing tier).
+-- Built from the factiontable merchant records in the ARZ; authoritative over
+-- the factionSource heuristic since it includes the required standing tier.
+buildFactionShopMap :: RecordDb -> HM.HashMap Text (Text, Text)
+buildFactionShopMap recs =
+  HM.fromList
+    [ (item, (factionKeyName fkey, capitalise tier))
+    | (nm, r) <- HM.toList recs
+    , "factiontables/" `T.isInfixOf` nm
+    , not ("_merchanttbl" `T.isPrefixOf` T.takeWhileEnd (/= '/') nm)
+    , Just (fkey, tier) <- [parseFT nm]
+    , Just (VList items) <- [HM.lookup "marketStaticItems" r]
+    , VString item <- items
+    ]
+  where
+    parseFT nm =
+      let base = T.dropEnd 4 (T.takeWhileEnd (/= '/') nm)
+       in case T.splitOn "_" base of
+            (fkey : tier : _) -> Just (fkey, tier)
+            _ -> Nothing
+    capitalise t = T.toUpper (T.take 1 t) <> T.drop 1 t
+    factionKeyName k = case k of
+      "bysmiel"          -> "Cult of Bysmiel"
+      "blacklegion"      -> "The Black Legion"
+      "dreeg"            -> "Cult of Dreeg"
+      "devilscrossing"   -> "Devil's Crossing"
+      "orderdeathsvigil" -> "Order of Death's Vigil"
+      "malmouth"         -> "Malmouth Resistance"
+      "kymonchosen"      -> "Kymon's Chosen"
+      "coven"            -> "Coven of Ugdenbog"
+      "solael"           -> "Cult of Solael"
+      "exile"            -> "The Outcast"
+      "wendigo"          -> "Barrowholm"
+      "rovers"           -> "Rovers"
+      "homestead"        -> "Homestead"
+      _                  -> k
 
 augmentFaction :: GameDb -> Text -> Maybe Text
 augmentFaction db rec =
   (lookupRecord rec db >>= HM.lookup "factionSource" >>= valueText) >>= factionName
 
--- Faction-vendor names for the augment @factionSource@ enum. Each @UserN@ was
--- identified from the unambiguous faction-named augments it sells (e.g. User8
--- sells every "Kymon's …", User4 every "Outcast's …"); User0 is confirmed by
--- Nightshade Powder (Rovers) and User2 is the Black Legion by elimination
--- (Menhir's Blessing). Readable values (Forgotten Gods "Survivors") pass through.
+-- Faction-vendor names for the augment @factionSource@ enum. There is NO
+-- authoritative enum->faction mapping in the game data, so this is built by
+-- inference from the augments each source sells. Two classes of confidence:
+--   * name-matched (high): the augments literally name the faction — User4
+--     "Outcast's …", User8 "Kymon's …", User9 "Coven's …", User11 "Malmouth's …",
+--     User13 "Bysmiel's …", User14 "Dreeg's …", User15 "Solael's …", User10
+--     (Ravager/Wendigo = Barrowholm), User5 (Uroboruuk = Order of Death's Vigil).
+--   * user-confirmed: User0 = Rovers (Nightshade Powder), User7 = The Black Legion
+--     (Kingsguard Powder), "Survivors" = Devil's Crossing.
+-- User2 = Homestead: its augments (Menhir's Blessing, Beast Tamer's, Solar
+-- Radiance) are all Homestead faction augments per grimtools/wiki. (An earlier
+-- "Black Legion" guess for User2 was wrong.)
 factionName :: Text -> Maybe Text
 factionName src = case src of
+  "Survivors" -> Just "Devil's Crossing"
   "User0" -> Just "Rovers"
-  "User2" -> Just "Black Legion"
+  "User2" -> Just "Homestead"
   "User4" -> Just "The Outcast"
   "User5" -> Just "Order of Death's Vigil"
-  "User7" -> Just "Devil's Crossing"
+  "User7" -> Just "The Black Legion"
   "User8" -> Just "Kymon's Chosen"
   "User9" -> Just "Coven of Ugdenbog"
   "User10" -> Just "Barrowholm"
@@ -442,7 +685,7 @@ factionName src = case src of
   "User14" -> Just "Cult of Dreeg"
   "User15" -> Just "Cult of Solael"
   _
-    | "User" `T.isPrefixOf` src -> Nothing -- unidentified faction enum
+    | "User" `T.isPrefixOf` src -> Nothing -- unconfirmed faction enum (e.g. User2)
     | T.null src -> Nothing
     | otherwise -> Just src -- already a readable faction name
 
@@ -452,8 +695,27 @@ toSummaryView diff s =
     { ssvDifficulty = case diff of Normal -> "Normal"; Elite -> "Elite"; Ultimate -> "Ultimate"
     , ssvResists = [ResistView n v cap over | (n, v, cap, over) <- ssResists s]
     , ssvAttributes = [NamedValueView l v | (l, v) <- ssAttributes s]
-    , ssvKeyTotals = [KeyTotalView l flat pct | (l, flat, pct) <- ssKeyTotals s]
+    , ssvKeyTotals =
+        [ KeyTotalView l flat pct
+        | (l, flat, pct) <- ssKeyTotals s
+        , l `notElem` ["Health", "Energy"] -- shown as totals below, not contributions
+        ]
+    , ssvHealth = ssHealthTotal s
+    , ssvEnergy = ssEnergyTotal s
     , ssvDamage = ssDamage s
+    , ssvDamageTable = map toDamageRowView (ssDamageTable s)
+    }
+
+toDamageRowView :: DamageRow -> DamageRowView
+toDamageRowView r =
+  DamageRowView
+    { drvType = drType r
+    , drvInstFlatLo = fst (drInstFlat r)
+    , drvInstFlatHi = snd (drInstFlat r)
+    , drvInstPct = drInstPct r
+    , drvDotFlatLo = fst (drDotFlat r)
+    , drvDotFlatHi = snd (drDotFlat r)
+    , drvDotPct = drDotPct r
     }
 
 toAttackView :: AttackDps -> AttackView
@@ -575,10 +837,21 @@ enhancementSlotFlag mt = do
 -- same scoring algorithm as the @upgrades@ CLI, holding every other slot and
 -- attachment (including the current overrides) fixed. The @kind@ selects which
 -- attachment to vary: @"component"@ swaps the slot's component, anything else
--- swaps the augment. Returns the record names in best-first order; records
--- absent from the result didn't pass the slot filter for that gear type.
-rankEnhancements :: GameDb -> [GearOverride] -> Int -> Text -> Character -> [Text]
-rankEnhancements db overrides slot kind c =
+-- swaps the augment. Returns the records in best-first order with the score
+-- delta and its components, so the UI can both rank and (optionally) explain.
+data RankView = RankView
+  { rvRecord :: !Text
+  , rvScore :: !Double
+  , rvOaDelta :: !Double
+  , rvDaDelta :: !Double
+  , rvDpsDelta :: !Double
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON RankView where toJSON = genericToJSON opts
+
+rankEnhancements :: GameDb -> [GearOverride] -> Difficulty -> Int -> Text -> Character -> [RankView]
+rankEnhancements db overrides difficulty slot kind c =
   case mFlag of
     Nothing -> []
     Just flag ->
@@ -587,16 +860,16 @@ rankEnhancements db overrides slot kind c =
             "component" -> cvComponents cat
             _ -> cvAugments cat
           compatible = [ev | ev <- pool, flag `elem` evSlots ev]
-          scored = [(evRecord ev, fst5 (scoreItems sb (substitute (evRecord ev)))) | ev <- compatible]
-       in map fst (sortOn (negate . snd) scored)
+          scored = [toRank (evRecord ev) (scoreItems sb (substitute (evRecord ev))) | ev <- compatible]
+       in sortOn (negate . rvScore) scored
   where
-    baseItems = applyOverrides overrides (equippedItems c)
+    baseItems = applyOverrides db overrides (equippedItems c)
     mTarget = case drop slot baseItems of
       (t : _) -> Just t
       [] -> Nothing
     mFlag = mTarget >>= \t -> enhancementSlotFlag (iaType (itemAttrs t db))
-    -- match `detailView`'s effective stat sources (Ultimate, permanent buffs)
-    difficulty = Ultimate
+    -- match `detailView`'s effective stat sources (caller-chosen difficulty,
+    -- permanent buffs)
     permanentBuffs = BuffToggle True False False
     nonSkill = statSources db baseItems ++ devotionSources db c ++ masterySources db c
     extra = devotionSources db c ++ masterySources db c ++ skillSources permanentBuffs nonSkill db c
@@ -611,7 +884,92 @@ rankEnhancements db overrides slot kind c =
     setAttachment rec it = case kind of
       "component" -> it {itemRelicName = rec}
       _ -> it {itemAugmentName = rec}
-    fst5 (a, _, _, _, _) = a
+    toRank r (sc, _changes, oa, da, dps) = RankView r sc oa da dps
+
+-- | Ranked candidate items for a given gear slot. Mirrors the @upgrades@ CLI:
+-- each owned item of the same slot type is overlaid (inheriting the current
+-- slot's component\/augment) and scored against the base build. Returns only
+-- candidates that score strictly above the current item, best-first. Locations
+-- come from 'loadOwnedItems' (e.g. @"Adam (stash)"@, @"shared stash"@).
+data ItemRankView = ItemRankView
+  { irvRecord :: !Text
+  , irvName :: !Text
+  , irvLocation :: !Text
+  , irvLevel :: !(Maybe Int)
+  , irvClassification :: !(Maybe Text)
+  , irvScore :: !Double
+  , irvOaDelta :: !Double
+  , irvDaDelta :: !Double
+  , irvDpsDelta :: !Double
+  , irvResistDeltas :: ![Text] -- e.g. "+10% Fire", "-5% Cold"
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON ItemRankView where toJSON = genericToJSON opts
+
+rankItems :: GameDb -> [OwnedItem] -> [GearOverride] -> Difficulty -> Int -> Character -> [ItemRankView]
+rankItems db owned overrides difficulty slot c =
+  case mTargetType of
+    Nothing -> []
+    Just ty ->
+      let candidates =
+            [ (locationLabel (oiLocation oi), oiItem oi)
+            | oi <- owned
+            , iaType (itemAttrs (oiItem oi) db) == Just ty
+            ]
+          -- One candidate per display name (the user picks an *item*, not a
+          -- copy of it); keep the first location encountered.
+          dedup = nubBy (\(_, a) (_, b) -> dn a == dn b) candidates
+          -- Skip the item in this slot (score 0) and any item already equipped
+          -- in another slot of the same type (e.g. the other ring).
+          currentName = maybe "" dn mTarget
+          otherSlotNames =
+            [ dn it
+            | (i, it) <- zip [0 ..] baseItems
+            , i /= slot
+            , iaType (itemAttrs it db) == Just ty
+            ]
+          excluded n = n == currentName || n `elem` otherSlotNames
+          scored = [score loc cand | (loc, cand) <- dedup, not (excluded (dn cand))]
+       in sortOn (negate . irvScore) [r | r <- scored, irvScore r > 0]
+  where
+    dn it = iaDisplayName (itemAttrs it db)
+    baseItems = applyOverrides db overrides (equippedItems c)
+    (mTarget, mTargetType) = case drop slot baseItems of
+      (t : _) -> (Just t, iaType (itemAttrs t db))
+      [] -> (Nothing, Nothing)
+    permanentBuffs = BuffToggle True False False
+    nonSkill = statSources db baseItems ++ devotionSources db c ++ masterySources db c
+    extra = devotionSources db c ++ masterySources db c ++ skillSources permanentBuffs nonSkill db c
+    sb :: ScoreBase
+    sb = mkScoreBase defaultWeights defaultUpgradeTarget difficulty c extra db baseItems
+    score loc cand =
+      let target = case mTarget of
+            Just t -> t
+            Nothing -> cand -- unreachable; mTargetType would be Nothing too
+          swapped = replaceAt slot (inheritGear target cand) baseItems
+          (sc, changes, oa, da, dps) = scoreItems sb swapped
+          attrs = itemAttrs cand db
+          fmtDelta (n, b, a) =
+            let d = a - b
+                sign = if d >= 0 then "+" else ""
+             in sign <> T.pack (show (round d :: Int)) <> "% " <> n
+       in ItemRankView
+            (itemBaseName cand)
+            (iaDisplayName attrs)
+            loc
+            (iaLevelRequirement attrs)
+            (iaClassification attrs)
+            sc
+            oa
+            da
+            dps
+            (map fmtDelta changes)
+    replaceAt i x xs =
+      let (before, rest) = splitAt i xs
+       in case rest of
+            (_ : after) -> before ++ x : after
+            [] -> before ++ [x]
 
 -- localized class display name, falling back to the raw tag
 className :: GameDb -> Character -> Text

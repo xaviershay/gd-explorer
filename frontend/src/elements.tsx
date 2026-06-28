@@ -171,6 +171,37 @@ export function orderedResists(entries: ResistEntry[]): ResistEntry[] {
   ];
 }
 
+// A fixed 2-column × 5-row resistance table: every canonical resistance in a
+// consistent position (icon label + value), with absent ones greyed. Used by the
+// character summary and each equipped item so positions line up across the page.
+export function ResistTable({ entries }: { entries: ResistEntry[] }) {
+  const all = orderedResists(entries);
+  return (
+    <div className="resist-table">
+      {all.map((r) => {
+        const el = ELEMENT_BY_LABEL.get(r.label) ?? elementOf(r.label);
+        const capNote =
+          r.cap !== undefined
+            ? ` — ${fmtPct(r.value)}% (cap ${fmtPct(r.cap)}${
+                r.overcap ? `, +${fmtPct(r.overcap)} over` : ""
+              })`
+            : "";
+        return (
+          <span
+            className={"resist-cell" + (r.value === 0 ? " zero" : "") + (r.value < 0 ? " neg" : "")}
+            key={r.label}
+            title={`${r.label} Resistance${capNote}`}
+            style={el ? { color: ELEMENT_COLOR[el] } : undefined}
+          >
+            {el && <ElementIcon element={el} size={16} />}
+            <span className="resist-val">{fmtPct(r.value)}%</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 // The in-game-style resistance grid: an icon + value per type in fixed columns.
 // Pass entries already ordered (see `orderedResists`). `inline` switches to a
 // flowing chip layout for compact item cards.

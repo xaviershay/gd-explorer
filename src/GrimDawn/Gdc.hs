@@ -85,14 +85,21 @@ data Character = Character
     charPhysique :: !Double
   , charCunning :: !Double
   , charSpirit :: !Double
+  , -- | Max health/energy as stored in the bio block (the game's last computed
+    -- totals, including gear/mastery contributions).
+    charHealth :: !Double
+  , charEnergy :: !Double
+  , -- | Faction reputation values from block 13, 0-indexed (index 0 = faction 1
+    -- = Devil's Crossing in gd-edit's 1-based scheme).
+    charFactions :: ![Float]
   }
   deriving (Show, Eq)
 
--- bio block (id 2) values we keep: physique, cunning, spirit.
-data Bio = Bio !Double !Double !Double
+-- bio block (id 2) values we keep: physique, cunning, spirit, health, energy.
+data Bio = Bio !Double !Double !Double !Double !Double
 
 emptyBio :: Bio
-emptyBio = Bio 0 0 0
+emptyBio = Bio 0 0 0 0 0
 
 -- "GDCX" as a little-endian int32.
 gdcxMagic :: Int32
@@ -241,7 +248,10 @@ readBlock2 = do
   phys <- decFloat
   cun <- decFloat
   spi <- decFloat
-  pure (Bio (realToFrac phys) (realToFrac cun) (realToFrac spi))
+  health <- decFloat
+  energy <- decFloat
+  pure (Bio (realToFrac phys) (realToFrac cun) (realToFrac spi)
+            (realToFrac health) (realToFrac energy))
 
 --------------------------------------------------------------------------------
 -- Block 8 (skills + devotions)
@@ -254,6 +264,27 @@ readBlock8 :: Dec [Skill]
 readBlock8 = do
   _version <- decInt
   decArray decSkill
+
+--------------------------------------------------------------------------------
+-- Block 13 (faction standings)
+--------------------------------------------------------------------------------
+
+-- Faction entry from block 13. We only keep the reputation value; the booleans
+-- and boost floats are skipped.
+readFaction :: Dec Float
+readFaction = do
+  _changed <- decBool
+  _unlocked <- decBool
+  value <- decFloat
+  _posBoost <- decFloat
+  _negBoost <- decFloat
+  pure (realToFrac value)
+
+readBlock13 :: Dec [Float]
+readBlock13 = do
+  _version <- decInt
+  _myFaction <- decInt
+  decArray readFaction
 
 --------------------------------------------------------------------------------
 -- Top-level file
@@ -269,43 +300,48 @@ readHeader = do
   _expansion <- decByte
   pure (name, male, className, level, hardcore)
 
--- top-level block loop, accumulating block 2 (bio) + 3 (items) + 4 (stash) + 8 (skills)
-readBlocks :: Bio -> ([Item], [Item]) -> [Item] -> [Skill] -> Dec (Bio, ([Item], [Item]), [Item], [Skill])
-readBlocks acc2 acc3 acc4 acc8 = do
+-- top-level block loop, accumulating block 2 (bio) + 3 (items) + 4 (stash) + 8 (skills) + 13 (factions)
+readBlocks :: Bio -> ([Item], [Item]) -> [Item] -> [Skill] -> [Float]
+           -> Dec (Bio, ([Item], [Item]), [Item], [Skill], [Float])
+readBlocks acc2 acc3 acc4 acc8 acc13 = do
   done <- (<= 0) <$> decRemaining
   if done
-    then pure (acc2, acc3, acc4, acc8)
+    then pure (acc2, acc3, acc4, acc8, acc13)
     else do
       blockId <- decInt
       len <- fromIntegral <$> decU32NoAdvance
       start <- decPos
-      (acc2', acc3', acc4', acc8') <- case blockId of
+      (acc2', acc3', acc4', acc8', acc13') <- case blockId of
         2 -> do
           r <- readBlock2
           cur <- decPos
           advanceOver (len - (cur - start))
-          pure (r, acc3, acc4, acc8)
+          pure (r, acc3, acc4, acc8, acc13)
         3 -> do
           r <- readBlock3
-          pure (acc2, r, acc4, acc8)
+          pure (acc2, r, acc4, acc8, acc13)
         4 -> do
           r <- readBlock4
-          pure (acc2, acc3, r, acc8)
+          pure (acc2, acc3, r, acc8, acc13)
         8 -> do
           r <- readBlock8
-          -- skip any trailing fields (masteries-allowed, item skills, ...)
           cur <- decPos
           advanceOver (len - (cur - start))
-          pure (acc2, acc3, acc4, r)
+          pure (acc2, acc3, acc4, r, acc13)
+        13 -> do
+          r <- readBlock13
+          cur <- decPos
+          advanceOver (len - (cur - start))
+          pure (acc2, acc3, acc4, acc8, r)
         _ -> do
           advanceOver len
-          pure (acc2, acc3, acc4, acc8)
+          pure (acc2, acc3, acc4, acc8, acc13)
       end <- decPos
       unless (end - start == len) $
         fail ("block " ++ show blockId ++ " length mismatch: expected "
                 ++ show len ++ " got " ++ show (end - start))
       verifyChecksum
-      readBlocks acc2' acc3' acc4' acc8'
+      readBlocks acc2' acc3' acc4' acc8' acc13'
 
 -- | Parse a character from the raw bytes of a @player.gdc@ file.
 loadCharacter :: BS.ByteString -> Either String Character
@@ -324,7 +360,8 @@ loadCharacter raw = do
       unless (dataVersion `elem` [6, 7, 8]) $
         fail ("unsupported gdc data-version " ++ show dataVersion)
       _mystery <- decStaticBytes 16
-      (Bio phys cun spi, (equip, inv), pstash, skills) <- readBlocks emptyBio ([], []) [] []
+      (Bio phys cun spi health energy, (equip, inv), pstash, skills, factions)
+        <- readBlocks emptyBio ([], []) [] [] []
       let keep = filter (not . emptyItemName)
       pure Character
         { charName = name
@@ -338,6 +375,9 @@ loadCharacter raw = do
         , charPhysique = phys
         , charCunning = cun
         , charSpirit = spi
+        , charHealth = health
+        , charEnergy = energy
+        , charFactions = factions
         }
 
 -- | Load and parse a character file from disk.
