@@ -121,8 +121,11 @@ export interface StatSummary {
     keyTotals: KeyTotal[];
     health: number;
     energy: number;
+    oa: number;
+    da: number;
     damage: string[];
     damageTable: DamageRow[];
+    ccResists: NamedValue[];
 }
 
 export interface ShoppingItem {
@@ -160,7 +163,7 @@ export interface ConstellationEntry {
     name: string;
     stars: number;
     power: string | null;
-    bonuses: string[];
+    bonuses: BonusGroups;
 }
 
 export interface CharacterDetail {

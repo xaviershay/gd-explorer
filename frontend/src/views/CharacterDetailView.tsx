@@ -23,13 +23,13 @@ import {
     elementColor,
     elementOf,
 } from "../elements";
+import { groupBonuses, GroupedStats } from "../bonuses";
 import { ItemImage } from "../components/ItemImage";
 import { ItemAttributes } from "../components/ItemAttributes";
 import { EnhancementPicker } from "../components/EnhancementPicker";
 import { ItemPicker } from "../components/ItemPicker";
 
 const num = (n: number) => Math.round(n).toLocaleString();
-const signed = (n: number) => (n > 0 ? "+" : "") + num(n);
 
 // Persisted per-character configuration (overrides + difficulty + max-level
 // cap) keyed by character name.  Survives reloads so the user doesn't have to
@@ -781,68 +781,43 @@ function SummaryPanel({
     const active = attacks.filter((a) => a.kind === "active");
     const procs = attacks.filter((a) => a.kind === "proc");
     const best = active.reduce((m, a) => Math.max(m, a.dps), 0);
-    const bestName = active.find((a) => a.dps === best)?.name;
     const procSum = procs.reduce((s, a) => s + a.dps, 0);
-    const oa = summary.keyTotals.find((k) => k.label === "Offensive Ability");
-    const da = summary.keyTotals.find((k) => k.label === "Defensive Ability");
     return (
         <div className="summary-panel">
             <div className="summary-body">
                 <div className="summary-lhs">
-                    {best > 0 && (
-                        <div className="summary-dps">
-                            <span className="dps-total">
-                                {num(best + procSum)}
-                                <span className="dps-unit"> DPS</span>
-                            </span>
-                            <span className="dps-break">
-                                <span className="dps-part">
-                                    {bestName ?? "best attack"} {num(best)}
-                                </span>
-                                {procSum > 0 && (
-                                    <span className="dps-part muted">
-                                        {" "}
-                                        + procs {num(procSum)}
-                                    </span>
+                    <div className="element-tables">
+                        <div className="element-tables-caption muted">Vitals</div>
+                        <table className="element-table">
+                            <tbody>
+                                {best > 0 && (
+                                    <tr>
+                                        <td className="el-label">DPS</td>
+                                        <td>{num(best + procSum)}</td>
+                                    </tr>
                                 )}
-                            </span>
-                        </div>
-                    )}
-                    <div className="summary-vitals">
-                        <span className="vital">
-                            <span className="vital-label">Health</span>
-                            <span className="vital-val">{num(summary.health)}</span>
-                        </span>
-                        <span className="vital">
-                            <span className="vital-label">Energy</span>
-                            <span className="vital-val">{num(summary.energy)}</span>
-                        </span>
-                        {oa && (
-                            <span className="vital">
-                                <span className="vital-label">OA</span>
-                                <span className="vital-val">
-                                    {signed(oa.flat)}
-                                    {oa.pct !== 0 && (
-                                        <span className="vital-pct muted">
-                                            {" "}({signed(oa.pct)}%)
-                                        </span>
-                                    )}
-                                </span>
-                            </span>
-                        )}
-                        {da && (
-                            <span className="vital">
-                                <span className="vital-label">DA</span>
-                                <span className="vital-val">
-                                    {signed(da.flat)}
-                                    {da.pct !== 0 && (
-                                        <span className="vital-pct muted">
-                                            {" "}({signed(da.pct)}%)
-                                        </span>
-                                    )}
-                                </span>
-                            </span>
-                        )}
+                                <tr>
+                                    <td className="el-label">Health</td>
+                                    <td>{num(summary.health)}</td>
+                                </tr>
+                                <tr>
+                                    <td className="el-label">Energy</td>
+                                    <td>{num(summary.energy)}</td>
+                                </tr>
+                                {summary.oa > 0 && (
+                                    <tr>
+                                        <td className="el-label">OA</td>
+                                        <td>{num(summary.oa)}</td>
+                                    </tr>
+                                )}
+                                {summary.da > 0 && (
+                                    <tr>
+                                        <td className="el-label">DA</td>
+                                        <td>{num(summary.da)}</td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
                     </div>
                 </div>
                 <div className="summary-rhs">
@@ -852,6 +827,21 @@ function SummaryPanel({
                         difficulty={summary.difficulty}
                     />
                 </div>
+                {summary.ccResists.length > 0 && (
+                    <div className="element-tables">
+                        <div className="element-tables-caption muted">Defenses</div>
+                        <table className="element-table">
+                            <tbody>
+                                {summary.ccResists.map((r) => (
+                                    <tr key={r.label}>
+                                        <td className="el-label">{r.label}</td>
+                                        <td>{Math.round(r.value)}%</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -905,18 +895,7 @@ function DevotionsPanel({
                         <div className="constellation-stars muted">
                             {d.stars} {d.stars === 1 ? "star" : "stars"}
                         </div>
-                        {d.power && (
-                            <div className="constellation-power">
-                                {d.power}
-                            </div>
-                        )}
-                        {(d.bonuses?.length ?? 0) > 0 && (
-                            <ul className="constellation-bonuses">
-                                {d.bonuses.map((b, i) => (
-                                    <li key={i}>{b}</li>
-                                ))}
-                            </ul>
-                        )}
+                        <GroupedStats {...groupBonuses([d.bonuses])} />
                     </div>
                 ))}
             </div>

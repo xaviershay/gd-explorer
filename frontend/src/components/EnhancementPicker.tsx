@@ -127,6 +127,7 @@ export function EnhancementPicker({
     const [query, setQuery] = useState("");
     const [elems, setElems] = useState<Set<Element>>(new Set());
     const [ranking, setRanking] = useState<RankEntry[] | null>(null);
+    const [loading, setLoading] = useState(false);
     const ref = useRef<HTMLDivElement>(null);
 
     // Drop any cached ranking when the fetcher's identity changes (e.g. when the
@@ -139,12 +140,16 @@ export function EnhancementPicker({
     useEffect(() => {
         if (!open || ranking || !fetchRanking) return;
         let cancelled = false;
+        setLoading(true);
         fetchRanking()
             .then((r) => {
                 if (!cancelled) setRanking(r);
             })
             .catch(() => {
                 /* leave unsorted on failure */
+            })
+            .finally(() => {
+                if (!cancelled) setLoading(false);
             });
         return () => {
             cancelled = true;
@@ -170,13 +175,17 @@ export function EnhancementPicker({
     const sel = options.find((o) => o.record === current);
     const q = query.trim().toLowerCase();
     const filtered = options.filter((o) => matches(o, q, elems));
-    // When a ranking has arrived, sort by it (best first); records not in the
-    // ranking (shouldn't normally happen) sort after, preserving relative order.
-    const ranked = ranking ? sortByRanking(filtered, ranking) : filtered;
-    // Upgrade score for each option (best-first list), shown alongside its row.
+    // When fetchRanking is provided, only show items that are in the ranked
+    // results (which are already filtered for buyability on the server). While
+    // loading, show nothing so unbuyable items never flash up.
     const scoreOf = ranking
         ? new Map(ranking.map((r) => [r.record, r.score]))
         : null;
+    const ranked = ranking
+        ? sortByRanking(filtered, ranking).filter((o) => scoreOf!.has(o.record))
+        : fetchRanking
+          ? []
+          : filtered;
 
     const choose = (record: string) => {
         onChange(record);
@@ -261,6 +270,11 @@ export function EnhancementPicker({
                         >
                             — No {label} —
                         </li>
+                        {loading && (
+                            <li className="enh-option muted">
+                                Scoring alternatives…
+                            </li>
+                        )}
                         {ranked.map((o) => (
                             <li
                                 key={o.record}
@@ -303,7 +317,7 @@ export function EnhancementPicker({
                                 </div>
                             </li>
                         ))}
-                        {ranked.length === 0 && (
+                        {!loading && ranked.length === 0 && (
                             <li className="enh-option muted">No matches</li>
                         )}
                     </ul>

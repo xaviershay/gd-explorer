@@ -414,7 +414,9 @@ h1 {
     text-align: center;
     border-bottom: 1px solid var(--border);
 }
-.element-table th:first-child { padding-left: 2px; }
+.element-table th:first-child {
+    padding-left: 2px;
+}
 .element-table td {
     padding: 3px 10px 3px 0;
     text-align: right;
@@ -436,6 +438,11 @@ h1 {
 }
 .element-table td.el-num {
     color: var(--muted);
+}
+.element-table td.el-label {
+    text-align: left;
+    color: var(--muted);
+    padding-right: 16px;
 }
 .element-table tr + tr td {
     border-top: 1px solid rgba(255, 255, 255, 0.04);
@@ -883,92 +890,53 @@ h1 {
 }
 
 .enh-score {
-  color: #6ddc7a;
-  font-weight: 600;
+    color: #6ddc7a;
+    font-weight: 600;
 }
 .enh-resist-delta {
-  font-weight: 600;
+    font-weight: 600;
 }
 
 /* Resistance table: fixed 2-column × 5-row grid (column-major), absent greyed */
 .resist-table {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: repeat(5, auto);
-  grid-auto-flow: column;
-  gap: 3px 18px;
-  font-variant-numeric: tabular-nums;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: repeat(5, auto);
+    grid-auto-flow: column;
+    gap: 3px 18px;
+    font-variant-numeric: tabular-nums;
 }
 .resist-cell {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 14px;
-  font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 14px;
+    font-weight: 600;
 }
-.resist-cell svg { flex: 0 0 auto; }
-.resist-cell.zero { opacity: 0.3; }
-.resist-cell.neg { opacity: 0.6; }
+.resist-cell svg {
+    flex: 0 0 auto;
+}
+.resist-cell.zero {
+    opacity: 0.3;
+}
+.resist-cell.neg {
+    opacity: 0.6;
+}
 
 /* Summary DPS headline */
 .summary-body {
-  display: flex;
-  gap: 24px;
-  align-items: flex-start;
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
 }
 .summary-lhs {
-  flex: 0 0 auto;
+    flex: 0 0 auto;
 }
 .summary-rhs {
-  flex: 1 1 auto;
-  min-width: 0;
+    flex: 1 1 auto;
+    min-width: 0;
 }
-.summary-dps {
-  display: flex;
-  align-items: baseline;
-  gap: 14px;
-  flex-wrap: wrap;
-  margin-bottom: 14px;
-}
-.dps-total {
-  font-size: 26px;
-  font-weight: 700;
-  color: #ffce3a;
-  font-variant-numeric: tabular-nums;
-}
-.dps-unit {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--muted);
-}
-.dps-break {
-  font-size: 13px;
-}
-.dps-part {
-  font-variant-numeric: tabular-nums;
-}
-.summary-vitals {
-  display: flex;
-  gap: 22px;
-  margin-bottom: 14px;
-}
-.vital {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
-.vital-label {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-}
-.vital-val {
-  font-size: 18px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
+
 
 /* Skills */
 .skills-grid {
@@ -1014,7 +982,7 @@ h1 {
 /* Devotions */
 .devotions-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: 10px;
 }
 .constellation-card {

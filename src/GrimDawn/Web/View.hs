@@ -302,7 +302,7 @@ data ConstellationView = ConstellationView
   { conName :: !Text
   , conStars :: !Int
   , conPower :: !(Maybe Text)
-  , conBonuses :: ![Text]
+  , conBonuses :: !BonusGroupsView
   }
   deriving (Show, Eq, Generic)
 
@@ -317,8 +317,11 @@ data StatSummaryView = StatSummaryView
   , ssvKeyTotals :: ![KeyTotalView] -- OA, DA, Armor, ... (contribution figures)
   , ssvHealth :: !Double -- computed max Health total
   , ssvEnergy :: !Double -- computed max Energy total
+  , ssvOa :: !Double -- computed OA total
+  , ssvDa :: !Double -- computed DA total
   , ssvDamage :: ![Text] -- total damage bonuses (e.g. "+120% Acid")
   , ssvDamageTable :: ![DamageRowView] -- per-damage-type table
+  , ssvCcResists :: ![NamedValueView] -- armor absorption + CC resists
   }
   deriving (Show, Eq, Generic)
 
@@ -484,18 +487,9 @@ shoppingList :: GameDb -> Character -> [OwnedItem] -> [Maybe Text] -> [Item] -> 
 shoppingList db c owned slots origs effs =
   [ toShop kind rec [s | (k, r, s) <- changes, k == kind, r == rec]
   | (kind, rec) <- nub [(k, r) | (k, r, _) <- changes]
-  , canBuy kind rec
   ]
   where
     shopMap = buildFactionShopMap (gdbRecords db)
-    charStandings = buildCharFactionStandings db c
-    canBuy "augment" rec = case HM.lookup rec shopMap of
-      Just (faction, reqTier) ->
-        case HM.lookup faction charStandings of
-          Just charTier -> standingRank charTier >= standingRank reqTier
-          Nothing -> False  -- faction not unlocked / below Friendly
-      Nothing -> True  -- not a faction augment (or unknown source), include it
-    canBuy _ _ = True
     changes = concat (zipWith3 diff slots origs effs)
     diff slot o e =
       let itemChanged = not (T.null (itemBaseName e)) && itemBaseName e /= itemBaseName o
@@ -572,12 +566,17 @@ buildDevotions db c = map renderConstellation constellations
             [] -> maybe "?" (skillDisplayName db . skName) (listToMaybe grp)
           power = listToMaybe (nub [skillDisplayName db (skName s) | s <- grp, isPower s])
           related = [(skName s, r) | s <- passives, Just r <- [lookupRecord (skName s) db]]
-          bonuses = resistBonuses related ++ damageBonuses related ++ characterBonuses related
+          grantedSkills = ["Grants " <> p | Just p <- [power]]
        in ConstellationView
             { conName = name
             , conStars = length grp
-            , conPower = power
-            , conBonuses = bonuses
+            , conPower = Nothing
+            , conBonuses = BonusGroupsView
+                { bgResistBonuses = resistBonuses related
+                , bgDamageBonuses = damageBonuses related
+                , bgBonuses = characterBonuses related
+                , bgSkillBonuses = grantedSkills ++ skillBonuses db related
+                }
             }
 
 -- | Map reputation value to in-game standing tier name.
@@ -599,8 +598,12 @@ standingRank "Revered"   = 4
 standingRank _           = 0
 
 -- | Map from faction display name → current standing tier for this character.
--- Uses gd-edit's 1-based faction index scheme (array index 0 = faction 1 =
--- Devil's Crossing; array index N ≥ 5 → faction UserN-5).
+-- Block 13 stores factions 1-based: index 1 = Devil's Crossing, indices 7+
+-- correspond to UserN where N = i-7 (empirically determined: User0=Rovers at
+-- i=7 gives 25000 max-rep, User7=Black Legion at i=14 gives 24600 Honored,
+-- User8=Kymon's at i=15 gives 14749 Honored — all consistent with a
+-- full-play character; offset=6 gave Rovers/Black Legion/Malmouth as hostile
+-- which is clearly wrong).
 buildCharFactionStandings :: GameDb -> Character -> HM.HashMap Text Text
 buildCharFactionStandings db c =
   HM.fromList
@@ -613,7 +616,7 @@ buildCharFactionStandings db c =
   where
     factionNameByIndex 1 = Just "Devil's Crossing"
     factionNameByIndex i
-      | i >= 6 = factionName ("User" <> T.pack (show (i - 6)))
+      | i >= 7 = factionName ("User" <> T.pack (show (i - 7)))
     factionNameByIndex _ = Nothing
 
 -- | Map from augment record name → (faction display name, minimum standing tier).
@@ -702,8 +705,11 @@ toSummaryView diff s =
         ]
     , ssvHealth = ssHealthTotal s
     , ssvEnergy = ssEnergyTotal s
+    , ssvOa = ssOaTotal s
+    , ssvDa = ssDaTotal s
     , ssvDamage = ssDamage s
     , ssvDamageTable = map toDamageRowView (ssDamageTable s)
+    , ssvCcResists = [NamedValueView l v | (l, v) <- ssCcResists s]
     }
 
 toDamageRowView :: DamageRow -> DamageRowView
@@ -859,10 +865,20 @@ rankEnhancements db overrides difficulty slot kind c =
           pool = case kind of
             "component" -> cvComponents cat
             _ -> cvAugments cat
-          compatible = [ev | ev <- pool, flag `elem` evSlots ev]
+          compatible = [ev | ev <- pool, flag `elem` evSlots ev, canBuy (evRecord ev)]
           scored = [toRank (evRecord ev) (scoreItems sb (substitute (evRecord ev))) | ev <- compatible]
        in sortOn (negate . rvScore) scored
   where
+    shopMap = buildFactionShopMap (gdbRecords db)
+    charStandings = buildCharFactionStandings db c
+    canBuy rec
+      | kind /= "augment" = True
+      | otherwise = case HM.lookup rec shopMap of
+          Just (faction, reqTier) ->
+            case HM.lookup faction charStandings of
+              Just charTier -> standingRank charTier >= standingRank reqTier
+              Nothing -> False
+          Nothing -> True
     baseItems = applyOverrides db overrides (equippedItems c)
     mTarget = case drop slot baseItems of
       (t : _) -> Just t

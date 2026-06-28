@@ -388,10 +388,22 @@ data StatSummary = StatSummary
   , ssKeyTotals :: ![(Text, Double, Double)]
   , ssHealthTotal :: !Double -- computed max Health (bio base + attrs + gear/buffs)
   , ssEnergyTotal :: !Double -- computed max Energy
+  , ssOaTotal :: !Double -- computed OA total using level/attr/gear formula
+  , ssDaTotal :: !Double -- computed DA total using level/attr/gear formula
   , ssDamage :: ![Text] -- total damage bonuses (e.g. "+120% Acid"), gear + buffs
   , ssDamageTable :: ![DamageRow] -- per-damage-type table: instant + DoT flat & %
+  , ssCcResists :: ![(Text, Double)] -- armor absorption + CC resists as (label, pct)
   }
   deriving (Show, Eq)
+
+ccResistFields :: [(Text, Text)]
+ccResistFields =
+  [ ("Armor Absorption", "defensiveAbsorptionModifier")
+  , ("Slow Resistance", "defensiveTotalSpeedResistance")
+  , ("Stun Resistance", "defensiveStun")
+  , ("Freeze Resistance", "defensiveFreeze")
+  , ("Trap Resistance", "defensiveTrap")
+  ]
 
 statSummary :: Difficulty -> Character -> [(Text, Record)] -> StatSummary
 statSummary diff c sources =
@@ -399,12 +411,20 @@ statSummary diff c sources =
     { ssResists = resistRows diff sources
     , ssAttributes = attrTotals
     , ssKeyTotals =
-        [ row | row@(label, _, _) <- keyTotalsOf sources, label `notElem` ["Physique", "Cunning", "Spirit"]
+        [ row | row@(label, _, _) <- keyTotalsOf sources
+        , label `notElem` ["Physique", "Cunning", "Spirit", "Offensive Ability", "Defensive Ability"]
         ]
     , ssHealthTotal = healthTotal
     , ssEnergyTotal = energyTotal
+    , ssOaTotal = oaTotal
+    , ssDaTotal = daTotal
     , ssDamage = damageBonuses sources
     , ssDamageTable = damageTable sources
+    , ssCcResists =
+        [ (label, sumField sources field)
+        | (label, field) <- ccResistFields
+        , sumField sources field /= 0
+        ]
     }
   where
     attrTotals =
@@ -428,6 +448,15 @@ statSummary diff c sources =
     energyTotal =
       (charEnergy c + bonusEnergy + sumField sources "characterMana")
         * (1 + sumField sources "characterManaModifier" / 100)
+    lvl = fromIntegral (charLevel c) :: Double
+    -- OA = (115 + 12*Level + 0.4*Cunning + flat bonuses) * (1 + %OA/100)
+    -- DA = (115 + 12*Level + 0.4*Spirit  + flat bonuses) * (1 + %DA/100)
+    oaTotal =
+      (115 + 12 * lvl + 0.4 * totalAttr "Cunning" + sumField sources "characterOffensiveAbility")
+        * (1 + sumField sources "characterOffensiveAbilityModifier" / 100)
+    daTotal =
+      (115 + 12 * lvl + 0.4 * totalAttr "Spirit" + sumField sources "characterDefensiveAbility")
+        * (1 + sumField sources "characterDefensiveAbilityModifier" / 100)
 
 --------------------------------------------------------------------------------
 -- Rendering
@@ -737,7 +766,9 @@ scoreItems sb over =
       daD = flatOf "Defensive Ability" kO - flatOf "Defensive Ability" (sbBaseKeyTotals sb)
       dpsD = estTotalDpsOf (sbDb sb) (sbChar sb) srcO - sbBaseDps sb
       w = sbWeights sb
-      sc = wResist w * resScore + wOa w * oaD + wDa w * daD + wDamage w * dpsD
+      allResistsMaxed = all (\(_, a, _, _) -> a >= sbTarget sb) rO
+      effectiveDamageWeight = if allResistsMaxed then wDamage w else 0
+      sc = wResist w * resScore + wOa w * oaD + wDa w * daD + effectiveDamageWeight * dpsD
    in (sc, changes, oaD, daD, dpsD)
 
 -- | Score each candidate as an overlay onto @base@, keeping net-positive results
