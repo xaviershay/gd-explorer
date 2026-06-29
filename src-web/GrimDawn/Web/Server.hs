@@ -34,14 +34,15 @@ import System.IO (hPutStrLn, stderr)
 import Web.Scotty
 import WaiAppStatic.Types (ss404Handler, ssIndices, unsafeToPiece)
 
-import GrimDawn.Aggregate (loadCharacters, loadOwnedItems)
+import GrimDawn.Aggregate (OwnedItem (..), loadCharacters, loadOwnedItems)
 import GrimDawn.Arc (loadArchiveFile)
 import GrimDawn.Db (GameDb, loadGameDb)
-import GrimDawn.Gdc (Character (..), itemWithName)
+import GrimDawn.Formulas (craftableItems, loadKnownFormulas)
+import GrimDawn.Gdc (Character (..), itemBaseName, itemWithName)
 import GrimDawn.Item (iaBitmap, itemAttrs)
 import GrimDawn.Report.Stats (Difficulty (..), parseDifficulty)
 import GrimDawn.Web.Texture (decodeTexture)
-import GrimDawn.Web.View (GearOverride (..), detailView, enhancementCatalog, rankEnhancements, rankItems, setsView, summaryView)
+import GrimDawn.Web.View (GearOverride (..), craftableBlueprints, detailView, enhancementCatalog, rankEnhancements, rankItems, setsView, skillDictionary, summaryView)
 
 data ServeOpts = ServeOpts
   { soPort :: !Int
@@ -73,10 +74,16 @@ runServer opts = do
 routes :: GameDb -> IORef (Maybe Textures) -> ServeOpts -> ScottyM ()
 routes db texCache opts = do
   middleware (staticMiddleware (soStaticDir opts))
+  -- Built once and shared (forced on first request) — it scans the whole DB.
+  let skillDict = skillDictionary db
 
   get "/api/sets" $ do
     owned <- loadOr (loadOwnedItems (soDataDir opts))
-    json (setsView db owned)
+    -- Learned blueprints are optional; a missing/unreadable formulas.gst just
+    -- means "nothing craftable", so never fail the sets page over it.
+    craftable <- liftIO (either (const []) (craftableItems db) <$> loadKnownFormulas (soDataDir opts))
+    let craftableNames = map (itemBaseName . oiItem) craftable
+    json (setsView db craftableNames owned)
 
   get "/api/characters" $ do
     chars <- loadOr (loadCharacters (soDataDir opts))
@@ -84,6 +91,23 @@ routes db texCache opts = do
 
   -- The attachable components/augments, for the gear configuration selectors.
   get "/api/enhancements" $ json (enhancementCatalog db)
+
+  -- Skill display name -> description, for tooltips on "Grants X" / "+N X" lines.
+  -- Computed once (lazily) and shared across requests.
+  get "/api/skills" $ json skillDict
+
+  -- Component / relic blueprint collections: every craftable item flagged by
+  -- blueprint status (learned/default/missing). Missing/unreadable formulas.gst
+  -- just means nothing learned.
+  -- The blacksmith crafts low-level recipes for free (no blueprint): components
+  -- up to level 20, relics up to level 24.
+  get "/api/components" $ do
+    learned <- liftIO (either (const []) id <$> loadKnownFormulas (soDataDir opts))
+    json (craftableBlueprints "ItemRelic" 20 db learned)
+
+  get "/api/relics" $ do
+    learned <- liftIO (either (const []) id <$> loadKnownFormulas (soDataDir opts))
+    json (craftableBlueprints "ItemArtifact" 24 db learned)
 
   get "/api/characters/:name" $ do
     name <- pathParam "name"

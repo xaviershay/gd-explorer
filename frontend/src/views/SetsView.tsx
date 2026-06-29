@@ -49,7 +49,9 @@ export function SetsView() {
         <h1>Set items ({state.data.length} sets)</h1>
         <p className="muted">
           Each square is a set piece; the number is how many copies you own. Greyed =
-          not owned. Colour = rarity. Click a set to see its pieces and combined totals.
+          not owned. Colour = rarity; a coloured outline means you don't own it but
+          have the blueprint to craft it. Click a set to see its pieces and combined
+          totals.
         </p>
         {order
           .filter((label) => groups.has(label))
@@ -125,6 +127,7 @@ function SetCard({
 
 function ItemSquare({ member: m }: { member: SetMember }) {
   const owned = m.count > 0;
+  const craftable = !owned && m.craftable;
   const tooltip =
     `${m.name}` +
     (m.gear.levelRequirement ? ` (lvl ${m.gear.levelRequirement})` : "") +
@@ -134,12 +137,20 @@ function ItemSquare({ member: m }: { member: SetMember }) {
           m.holdings
             .map((h) => `${h.location}${h.count > 1 ? ` ×${h.count}` : ""}`)
             .join(", ")
-        : "not owned"
+        : craftable
+          ? "not owned — craftable (blueprint known)"
+          : "not owned"
     }`;
   return (
     <div
-      className={"item-square" + (owned ? "" : " missing")}
-      style={owned ? { background: rarityColor(m.gear.classification) } : undefined}
+      className={"item-square" + (owned ? "" : craftable ? " craftable" : " missing")}
+      style={
+        owned
+          ? { background: rarityColor(m.gear.classification) }
+          : craftable
+            ? { borderColor: rarityColor(m.gear.classification) }
+            : undefined
+      }
       title={tooltip}
     >
       {owned ? m.count : ""}

@@ -9,6 +9,8 @@ import {
     elementOf,
 } from "../elements";
 import { ItemImage } from "./ItemImage";
+import { useSkillDict, skillInfoFor } from "../skills";
+import { SkillHover } from "./SkillHover";
 
 // Element filter chips, in the usual resistance order.
 const FILTER_ELEMENTS: Element[] = [
@@ -42,6 +44,7 @@ const STAT_GROUPS: { key: keyof Enhancement; label: string }[] = [
 ];
 
 function GroupedLines({ e }: { e: Enhancement }) {
+    const skillDict = useSkillDict();
     return (
         <>
             {STAT_GROUPS.map(({ key, label }) => {
@@ -51,6 +54,7 @@ function GroupedLines({ e }: { e: Enhancement }) {
                 // and stat names that merely contain an element word must not.
                 const colored =
                     key === "resistBonuses" || key === "damageBonuses";
+                const skills = key === "skillBonuses";
                 return (
                     <div key={key} className="enh-group">
                         <span className="enh-group-label muted">{label}</span>
@@ -64,7 +68,14 @@ function GroupedLines({ e }: { e: Enhancement }) {
                                         : undefined
                                 }
                             >
-                                {l}
+                                {skills ? (
+                                    <SkillHover
+                                        line={l}
+                                        info={skillInfoFor(l, skillDict)}
+                                    />
+                                ) : (
+                                    l
+                                )}
                             </span>
                         ))}
                     </div>

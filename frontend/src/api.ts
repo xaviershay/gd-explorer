@@ -22,6 +22,7 @@ export interface SetMember {
     gear: Gear;
     setTier: number;
     setBonus: BonusGroups;
+    craftable: boolean; // not owned, but a learned blueprint can craft it
 }
 
 export interface SetView {
@@ -184,6 +185,28 @@ async function getJSON<T>(path: string): Promise<T> {
     const res = await fetch(path);
     if (!res.ok) throw new Error(`${path}: ${res.status} ${res.statusText}`);
     return res.json() as Promise<T>;
+}
+
+// A craftable component or relic and its blueprint status:
+//  - "learned": a Blueprint recipe you've found.
+//  - "missing": a Blueprint recipe not found yet.
+//  - "default": always craftable at the blacksmith (no blueprint needed).
+export interface Craftable {
+    name: string;
+    record: string;
+    classification: string | null;
+    level: number | null;
+    status: "learned" | "default" | "missing";
+    bonuses: BonusGroups;
+}
+
+export const getComponents = () => getJSON<Craftable[]>("/api/components");
+export const getRelics = () => getJSON<Craftable[]>("/api/relics");
+
+// A skill's hover-card payload: its description and what it grants.
+export interface SkillInfo {
+    description: string;
+    bonuses: BonusGroups;
 }
 
 export const getSets = () => getJSON<SetView[]>("/api/sets");

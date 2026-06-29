@@ -36,11 +36,19 @@ import GrimDawn.Gdc (itemBaseName, itemWithName)
 -- | Parse the known crafting blueprints out of raw @formulas.gst@ bytes,
 -- returning the formula (and/or crafted-item) record names it references.
 parseFormulas :: BS.ByteString -> Either String [Text]
-parseFormulas raw = do
-  (cipher, pos0) <- initCipher raw
-  (bodies, _, _) <- runDec (decInt *> walkBlocks) raw pos0 cipher
-  pure (dedup (concatMap (scanRecordNames . TE.decodeLatin1) bodies))
+parseFormulas raw
+  -- Real @formulas.gst@ files are *plaintext* GD block data ("begin_block" and
+  -- "records/...dbr" paths appear verbatim), unlike the XOR-enciphered .gdc/.gst
+  -- saves. So scan the raw bytes directly first.
+  | not (null plain) = Right plain
+  -- Fall back to the enciphered-stream interpretation in case a variant is
+  -- encrypted (decode each framed block body, then scan).
+  | otherwise = do
+      (cipher, pos0) <- initCipher raw
+      (bodies, _, _) <- runDec (decInt *> walkBlocks) raw pos0 cipher
+      pure (dedup (concatMap (scanRecordNames . TE.decodeLatin1) bodies))
   where
+    plain = dedup (scanRecordNames (TE.decodeLatin1 raw))
     dedup = foldr (\x acc -> if x `elem` acc then acc else x : acc) []
 
 -- Walk top-level framed blocks (@id@, @length@ read without advancing state,

@@ -29,6 +29,10 @@ module GrimDawn.Web.View
   , summaryView
   , detailView
   , enhancementCatalog
+  , craftableBlueprints
+  , CraftableView (..)
+  , skillDictionary
+  , SkillInfoView (..)
   , rankEnhancements
   , RankView (..)
   , rankItems
@@ -135,6 +139,7 @@ data SetMemberView = SetMemberView
   , smvGear :: !GearView -- full in-game-style attributes (rarity, stats, ...)
   , smvSetTier :: !Int -- piece count this item activates (its 1-based position)
   , smvSetBonus :: !BonusGroupsView -- set bonus newly unlocked at that tier, by category
+  , smvCraftable :: !Bool -- not owned, but a learned blueprint can craft it
   }
   deriving (Show, Eq, Generic)
 
@@ -164,11 +169,15 @@ data HoldingView = HoldingView
 
 instance ToJSON HoldingView where toJSON = genericToJSON opts
 
-setsView :: GameDb -> [OwnedItem] -> [SetView]
-setsView db owned = map (toSetView db) (setReport db owned)
+-- | Set-completion views. @craftableNames@ are the item record basenames a
+-- learned blueprint can craft, so unowned members get flagged 'smvCraftable'.
+setsView :: GameDb -> [Text] -> [OwnedItem] -> [SetView]
+setsView db craftableNames owned = map (toSetView db craftSet) (setReport db owned)
+  where
+    craftSet = HM.fromList [(n, ()) | n <- craftableNames] :: HM.HashMap Text ()
 
-toSetView :: GameDb -> SetCompletion -> SetView
-toSetView db sc =
+toSetView :: GameDb -> HM.HashMap Text () -> SetCompletion -> SetView
+toSetView db craftSet sc =
   SetView
     { svName = scName sc
     , svRecord = scRecord sc
@@ -182,10 +191,10 @@ toSetView db sc =
     }
   where
     setRec = lookupRecord (scRecord sc) db
-    members = zipWith (toMemberView db setRec) [1 ..] (scMembers sc)
+    members = zipWith (toMemberView db craftSet setRec) [1 ..] (scMembers sc)
 
-toMemberView :: GameDb -> Maybe Record -> Int -> SetMember -> SetMemberView
-toMemberView db setRec tier m =
+toMemberView :: GameDb -> HM.HashMap Text () -> Maybe Record -> Int -> SetMember -> SetMemberView
+toMemberView db craftSet setRec tier m =
   SetMemberView
     { smvName = smName m
     , smvRecord = smRecord m
@@ -195,6 +204,7 @@ toMemberView db setRec tier m =
     , smvGear = toGearView (smRecord m) Nothing Nothing (itemAttrs (itemWithName (smRecord m)) db)
     , smvSetTier = tier
     , smvSetBonus = maybe emptyBonusGroups (tierBonusGroups db tier) setRec
+    , smvCraftable = not (smOwned m) && HM.member (smRecord m) craftSet
     }
 
 -- | The set bonus newly unlocked at @tier@ pieces: the per-tier delta of the set
@@ -846,6 +856,116 @@ enhancementCatalog db =
             , evSkillBonuses = skillBonuses db related
             }
 
+-- | A craftable component or relic and the status of its crafting blueprint.
+data CraftableView = CraftableView
+  { cbName :: !Text
+  , cbRecord :: !Text -- the crafted item record (icon / lookup)
+  , cbClassification :: !(Maybe Text) -- rarity tier
+  , cbLevel :: !(Maybe Int) -- level requirement of the crafted item
+  , cbStatus :: !Text -- "learned" | "default" | "missing"
+  , cbBonuses :: !BonusGroupsView -- what the crafted item grants
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON CraftableView where toJSON = genericToJSON opts
+
+-- | Every item of @craftClass@ (e.g. @"ItemRelic"@ components or @"ItemArtifact"@
+-- relics) that has a crafting blueprint, with each item's blueprint status:
+--
+--   * @learned@ — a @Blueprint:@ recipe the account has in @formulas.gst@.
+--   * @default@ — always craftable without finding a blueprint: a bare-name
+--     blacksmith recipe, or any recipe whose item level is at most
+--     @autoDefaultMax@ (low-level component recipes the game grants for free).
+--   * @missing@ — a @Blueprint:@ recipe above that level not yet found.
+--
+-- @autoDefaultMax@ is the level cutoff for the free low-level recipes (20 for
+-- components; 0 for relics, which always require a blueprint).
+-- Deduplicated by crafted item (best status wins: learned > default > missing).
+craftableBlueprints :: Text -> Int -> GameDb -> [Text] -> [CraftableView]
+craftableBlueprints craftClass autoDefaultMax db learnedNames =
+  sortOn (\c -> (cbLevel c, cbName c)) (HM.elems byItem)
+  where
+    learnedSet = HM.fromList [(n, ()) | n <- learnedNames] :: HM.HashMap Text ()
+    levelOf rec = case HM.lookup "levelRequirement" rec of
+      Just (VInt n) -> Just (fromIntegral n)
+      Just (VFloat f) -> Just (round f)
+      _ -> Nothing
+    bonusesOf rrec =
+      let related = [("", rrec)]
+       in BonusGroupsView
+            { bgResistBonuses = resistBonuses related
+            , bgDamageBonuses = damageBonuses related
+            , bgBonuses = characterBonuses related
+            , bgSkillBonuses = skillBonuses db related
+            }
+    byItem = HM.fromListWith mergeStatus
+      [ ( crafted
+        , CraftableView
+            { cbName = fromMaybe (T.takeWhileEnd (/= '/') crafted) (HM.lookup "description" rrec >>= valueText)
+            , cbRecord = crafted
+            , cbClassification = HM.lookup "itemClassification" rrec >>= valueText
+            , cbLevel = lvl
+            , cbStatus = status
+            , cbBonuses = bonusesOf rrec
+            }
+        )
+      | (bpName, bp) <- HM.toList (gdbRecords db)
+      , "crafting/blueprints/" `T.isInfixOf` bpName
+      , Just crafted <- [HM.lookup "artifactName" bp >>= valueText]
+      , Just rrec <- [lookupRecord crafted db]
+      , (HM.lookup "Class" rrec >>= valueText) == Just craftClass
+      , let desc = fromMaybe "" (HM.lookup "description" bp >>= valueText)
+            learnable = "Blueprint:" `T.isPrefixOf` desc
+            lvl = levelOf rrec
+            status
+              | HM.member bpName learnedSet = "learned"
+              | not learnable = "default" -- bare-name blacksmith recipe
+              | maybe False (<= autoDefaultMax) lvl = "default" -- free low-level recipe
+              | otherwise = "missing"
+      ]
+    rank s = case s :: Text of "learned" -> 2 :: Int; "default" -> 1; _ -> 0
+    mergeStatus a b = if rank (cbStatus b) > rank (cbStatus a) then b else a
+
+-- | A skill's tooltip payload: its description plus what it grants (the scalar
+-- effects we can read off the skill record — per-level array effects are skipped).
+data SkillInfoView = SkillInfoView
+  { siDescription :: !Text
+  , siBonuses :: !BonusGroupsView
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON SkillInfoView where toJSON = genericToJSON opts
+
+-- | Map every skill's display name to its tooltip info, for UI hover cards on
+-- "Grants X" / "+N to X" skill bonus lines. Deduplicated by display name,
+-- preferring an entry that actually has a description.
+skillDictionary :: GameDb -> HM.HashMap Text SkillInfoView
+skillDictionary db =
+  HM.fromListWith prefer
+    [ (nm, SkillInfoView desc bonuses)
+    | (_, r) <- HM.toList (gdbRecords db)
+    , Just nm <- [HM.lookup "skillDisplayName" r >>= valueText]
+    , not (T.null nm)
+    , let desc = fromMaybe "" (HM.lookup "skillBaseDescription" r >>= valueText)
+          bonuses = bonusesOf r
+    , not (T.null desc) || not (emptyGroups bonuses)
+    ]
+  where
+    bonusesOf r =
+      let related = [("", r)]
+       in BonusGroupsView
+            { bgResistBonuses = resistBonuses related
+            , bgDamageBonuses = damageBonuses related
+            , bgBonuses = characterBonuses related
+            , bgSkillBonuses = skillBonuses db related
+            }
+    emptyGroups b =
+      null (bgResistBonuses b)
+        && null (bgDamageBonuses b)
+        && null (bgBonuses b)
+        && null (bgSkillBonuses b)
+    prefer a b = if not (T.null (siDescription a)) then a else b
+
 equippedItems :: Character -> [Item]
 equippedItems = filter (not . emptyItemName) . charEquipped
 
@@ -904,6 +1024,8 @@ rankEnhancements db overrides difficulty slot kind c =
               Just charTier -> standingRank charTier >= standingRank reqTier
               Nothing -> False
           Nothing -> True
+    -- Upgrades are scored against the current build (with the user's what-if
+    -- overlays applied), so suggestions reflect the gear as configured.
     baseItems = applyOverrides db overrides (equippedItems c)
     mTarget = case drop slot baseItems of
       (t : _) -> Just t
@@ -975,6 +1097,7 @@ rankItems db owned overrides difficulty slot c =
        in sortOn (negate . irvScore) [r | r <- scored, irvScore r > 0]
   where
     dn it = iaDisplayName (itemAttrs it db)
+    -- Score against the current build (with the user's what-if overlays applied).
     baseItems = applyOverrides db overrides (equippedItems c)
     (mTarget, mTargetType) = case drop slot baseItems of
       (t : _) -> (Just t, iaType (itemAttrs t db))

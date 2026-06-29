@@ -57,7 +57,7 @@ hero =
 spec :: Spec
 spec = do
   describe "setsView" $ do
-    let [sv] = setsView synthDb owned
+    let [sv] = setsView synthDb [] owned
     it "summarises owned vs total and members" $ do
       svName sv `shouldBe` "Test Set"
       svOwnedCount sv `shouldBe` 1

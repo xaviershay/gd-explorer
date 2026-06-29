@@ -1,4 +1,6 @@
 import { BonusItem, orderedResists, ResistEntry, ResistRow, ResistTable } from "./elements";
+import { useSkillDict, skillInfoFor } from "./skills";
+import { SkillHover } from "./components/SkillHover";
 
 // Stat bonuses grouped for display, matching the set view's "Combined totals":
 // resistances summarised as icons, everything else bucketed into these groups.
@@ -153,6 +155,7 @@ export function GroupedStats({
   inlineResists?: boolean;
   resistTable?: boolean;
 }) {
+  const skillDict = useSkillDict();
   return (
     <>
       {resistTable ? (
@@ -166,9 +169,18 @@ export function GroupedStats({
           <ul className="ia-lines">
             {/* Only damage-type lines (the combat group) get element colouring;
                 resistances are coloured by their own icons, and skill/stat names
-                that merely contain an element word (e.g. "Fire Strike") must not. */}
+                that merely contain an element word (e.g. "Fire Strike") must not.
+                Skill lines get a tooltip describing what the skill does. */}
             {groups[g].map((t, i) =>
-              g === "combat" ? <BonusItem key={i} line={t} /> : <li key={i}>{t}</li>,
+              g === "combat" ? (
+                <BonusItem key={i} line={t} />
+              ) : g === "skills" ? (
+                <li key={i}>
+                  <SkillHover line={t} info={skillInfoFor(t, skillDict)} />
+                </li>
+              ) : (
+                <li key={i}>{t}</li>
+              ),
             )}
           </ul>
         </div>

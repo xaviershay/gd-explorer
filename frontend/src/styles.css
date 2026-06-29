@@ -127,6 +127,104 @@ h1 {
     background: #262a31;
     border: 1px dashed #3a3f49;
 }
+/* Not owned but craftable from a known blueprint: dim fill with a solid
+   rarity-coloured outline (colour set inline). */
+.item-square.craftable {
+    background: #262a31;
+    border: 2px solid;
+}
+
+/* Skill bonus lines with a hover card (description + what they grant) */
+.skill-line {
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+    cursor: help;
+}
+.skill-card {
+    position: fixed;
+    z-index: 1000;
+    max-width: 300px;
+    padding: 8px 10px;
+    background: #1b1e24;
+    border: 1px solid #3a3f49;
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+    font-size: 12px;
+}
+.skill-card-name {
+    font-weight: 700;
+    color: #e8c97a;
+    margin-bottom: 4px;
+}
+.skill-card-desc {
+    color: var(--muted);
+    line-height: 1.35;
+}
+.skill-card-grants {
+    list-style: none;
+    margin: 6px 0 0;
+    padding: 6px 0 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.skill-card-grants li {
+    font-variant-numeric: tabular-nums;
+}
+
+/* Component / relic blueprint collection */
+.craft-section {
+    margin-bottom: 20px;
+}
+.craft-grid {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 10px;
+    /* stretch (default) makes every card in a row match the tallest card */
+    align-items: stretch;
+}
+.craft-card {
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #20242c;
+}
+.craft-card.status-missing {
+    opacity: 0.55;
+    border-style: dashed;
+}
+.craft-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.craft-title {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.craft-name {
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.craft-meta {
+    font-size: 11px;
+}
+.craft-status.learned {
+    color: #7fd17f;
+}
+.craft-status.default {
+    color: #c7a96b;
+}
+.craft-status.missing {
+    color: var(--muted);
+}
 
 /* Sets: two-column layout (map on the left, preview on the right) */
 .sets-layout {
@@ -225,6 +323,15 @@ h1 {
     justify-content: center;
     color: var(--muted);
     font-size: 20px;
+}
+/* Real item textures keep their native aspect ratio (the bitmap's grid-cell
+   dimensions), bounded by the slot box. The fixed width/height above only frames
+   the "?" placeholder div. */
+img.pin-image {
+    width: auto;
+    height: auto;
+    max-width: 48px;
+    max-height: 48px;
 }
 .pin-remove {
     position: absolute;
@@ -484,6 +591,12 @@ h1 {
     font-size: 14px;
     flex: 0 0 auto;
 }
+.shop-item img.pin-image {
+    width: auto;
+    height: auto;
+    max-width: 32px;
+    max-height: 32px;
+}
 .shop-body {
     min-width: 0;
 }
@@ -672,6 +785,12 @@ h1 {
     font-size: 12px;
     border-radius: 4px;
 }
+.enh-trigger img.pin-image {
+    width: auto;
+    height: auto;
+    max-width: 24px;
+    max-height: 24px;
+}
 .enh-trigger-label {
     font-size: 10px;
     text-transform: uppercase;
@@ -784,6 +903,12 @@ h1 {
     font-size: 12px;
     border-radius: 4px;
     flex: 0 0 auto;
+}
+.enh-option img.pin-image {
+    width: auto;
+    height: auto;
+    max-width: 28px;
+    max-height: 28px;
 }
 .enh-option-body {
     min-width: 0;

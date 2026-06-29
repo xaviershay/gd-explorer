@@ -713,8 +713,12 @@ data Weights = Weights
 -- damage delta is a raw DPS change, often hundreds to thousands). Survivability
 -- (resistances + defensive ability) is weighted well above raw damage, so a piece
 -- that shores up a resist or DA hole beats one that only adds offence.
+-- Resist is the priority: its term is the squared shortfall below the target, so
+-- a swap that knocks a resist below cap costs far more than a marginal OA/DA gain
+-- can return. OA/DA stay as light tie-breakers (a point of DA ~ a few points of
+-- DPS), so they no longer override getting resistances to cap.
 defaultWeights :: Weights
-defaultWeights = Weights {wResist = 2, wOa = 30, wDa = 80, wDamage = 1}
+defaultWeights = Weights {wResist = 2, wOa = 4, wDa = 5, wDamage = 1}
 
 -- | Set one weight by category name (resist|oa|da|damage); unknown names are ignored.
 setWeight :: Text -> Double -> Weights -> Weights
