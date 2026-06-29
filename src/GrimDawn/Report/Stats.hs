@@ -77,11 +77,23 @@ import GrimDawn.Report.Color (colorByType)
 data Difficulty = Normal | Elite | Ultimate
   deriving (Show, Eq)
 
--- | The all-resistance penalty for a difficulty (Normal 0, Elite -25, Ultimate -50).
-difficultyPenalty :: Difficulty -> Double
-difficultyPenalty Normal = 0
-difficultyPenalty Elite = 25
-difficultyPenalty Ultimate = 50
+-- | Flat resistance penalty per type and difficulty.
+-- Elite:    -25% on fire/cold/lightning/poison/pierce only.
+-- Ultimate: -50% on those 5, -25% on bleeding/vitality/aether/chaos.
+-- physical has no penalty at any difficulty.
+difficultyPenalty :: Difficulty -> Text -> Double
+difficultyPenalty Normal   _  = 0
+difficultyPenalty Elite    ty = if ty `elem` bigFive then 25 else 0
+difficultyPenalty Ultimate ty
+  | ty `elem` bigFive  = 50
+  | ty `elem` medFour  = 25
+  | otherwise          = 0
+
+bigFive :: [Text]
+bigFive = ["fire", "cold", "lightning", "poison", "pierce"]
+
+medFour :: [Text]
+medFour = ["bleed", "vitality", "aether", "chaos"]
 
 parseDifficulty :: String -> Maybe Difficulty
 parseDifficulty s = case map toLower s of
@@ -114,10 +126,15 @@ statSources db items =
 -- | Passive stat records granted by a character's chosen devotions: each taken
 -- constellation star (excluding the @*_skill@ celestial-power procs, which are
 -- granted skills rather than always-on passives).
+--
+-- The save lists *every* star of any touched constellation, including ones the
+-- character has not allocated a point to (@skLevel == 0@); those must be skipped
+-- or their passives (resistances, etc.) inflate the totals.
 devotionSources :: GameDb -> Character -> [(Text, Record)]
 devotionSources db c =
   [ (skName s, r)
   | s <- charSkills c
+  , skLevel s > 0
   , "/devotion/tier" `T.isInfixOf` skName s
   , not ("_skill" `T.isSuffixOf` T.dropEnd 4 (skName s))
   , Just r <- [lookupRecord (skName s) db]
@@ -365,7 +382,7 @@ resistRows diff sources =
   | (ty, fields) <- resistFieldMap
   , let gear = sum (map (sumField sources) fields)
         cap = baseResistCap + sumField sources ("defensive" <> resistStem ty <> "MaxResist") + sumField sources "defensiveAllMaxResist"
-        afterPenalty = gear - difficultyPenalty diff
+        afterPenalty = gear - difficultyPenalty diff ty
         effective = min afterPenalty cap
         overcap = max 0 (afterPenalty - cap)
         name = effectDisplay ["defensive"] (resistToken ty)
@@ -392,18 +409,27 @@ data StatSummary = StatSummary
   , ssDaTotal :: !Double -- computed DA total using level/attr/gear formula
   , ssDamage :: ![Text] -- total damage bonuses (e.g. "+120% Acid"), gear + buffs
   , ssDamageTable :: ![DamageRow] -- per-damage-type table: instant + DoT flat & %
-  , ssCcResists :: ![(Text, Double)] -- armor absorption + CC resists as (label, pct)
+  , ssCcResists :: ![(Text, Double, Double, Double)] -- (label, effective %, cap, overcap)
   }
   deriving (Show, Eq)
 
+-- Crowd-control resistances: additive, capped at 80% (like elemental resists).
 ccResistFields :: [(Text, Text)]
 ccResistFields =
-  [ ("Armor Absorption", "defensiveAbsorptionModifier")
-  , ("Slow Resistance", "defensiveTotalSpeedResistance")
+  [ ("Slow Resistance", "defensiveTotalSpeedResistance")
   , ("Stun Resistance", "defensiveStun")
   , ("Freeze Resistance", "defensiveFreeze")
   , ("Trap Resistance", "defensiveTrap")
   ]
+
+ccResistCap :: Double
+ccResistCap = 80
+
+-- Armor absorption starts at a 70% base; @defensiveAbsorptionModifier@ (the
+-- "% Increased Armor Absorption" from gear/skills) raises it *multiplicatively*,
+-- e.g. +36% -> 70 * 1.36 = 95.2%. Hard cap 100%.
+armorAbsorptionBase :: Double
+armorAbsorptionBase = 70
 
 statSummary :: Difficulty -> Character -> [(Text, Record)] -> StatSummary
 statSummary diff c sources =
@@ -420,13 +446,25 @@ statSummary diff c sources =
     , ssDaTotal = daTotal
     , ssDamage = damageBonuses sources
     , ssDamageTable = damageTable sources
-    , ssCcResists =
-        [ (label, sumField sources field)
-        | (label, field) <- ccResistFields
-        , sumField sources field /= 0
-        ]
+    , ssCcResists = armorAbsorption : blockChance ++ ccRows
     }
   where
+    armorAbsorption =
+      let raw = armorAbsorptionBase * (1 + sumField sources "defensiveAbsorptionModifier" / 100)
+       in ("Armor Absorption", min raw 100, 100, max 0 (raw - 100))
+    -- Shield block chance (only with a shield equipped); the flat chance scaled
+    -- by any % block-chance modifier, capped at 100%.
+    blockChance =
+      let raw =
+            sumField sources "defensiveBlockChance"
+              * (1 + sumField sources "defensiveBlockChanceModifier" / 100)
+       in [("Block Chance", min raw 100, 100, max 0 (raw - 100)) | raw /= 0]
+    ccRows =
+      [ (label, min raw ccResistCap, ccResistCap, max 0 (raw - ccResistCap))
+      | (label, field) <- ccResistFields
+      , let raw = sumField sources field
+      , raw /= 0
+      ]
     attrTotals =
       [ (label, (baseV + sumField sources flatField) * (1 + sumField sources pctField / 100))
       | (label, baseV, flatField, pctField) <- attrFieldsOf c
@@ -487,7 +525,10 @@ renderStats useColor diff c extra db items =
     sources = statSources db items ++ extra
     equipped = filter (not . emptyItemName) items
     blank xs = if null xs then [] else [""]
-    penaltyNote = if difficultyPenalty diff > 0 then ": -" <> showN (difficultyPenalty diff) <> "% resist" else ""
+    penaltyNote = case diff of
+      Normal   -> ""
+      Elite    -> ": -25% elem/pierce"
+      Ultimate -> ": -50% elem/pierce, -25% bleed/vit/aether/chaos"
 
     resistLine (name, eff, cap, over) =
       "  "

@@ -125,7 +125,7 @@ export interface StatSummary {
     da: number;
     damage: string[];
     damageTable: DamageRow[];
-    ccResists: NamedValue[];
+    ccResists: ResistStat[];
 }
 
 export interface ShoppingItem {
@@ -174,6 +174,7 @@ export interface CharacterDetail {
     summary: StatSummary;
     attacks: Attack[];
     gear: Gear[];
+    armorTable: NamedValue[];
     shopping: ShoppingItem[];
     masteries: MasteryGroup[];
     devotions: ConstellationEntry[];

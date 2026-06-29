@@ -197,13 +197,18 @@ readBlock3 = do
       _focused <- decInt
       _selected <- decInt
       sacks <- replicateM sackCount (readSubBlock readInventorySack)
-      _useAlt <- decBool
+      -- Weapons live in two swap sets (primary + alternate), each 2 slots
+      -- (main hand + off hand). Only the set the character is actually wielding
+      -- should count as equipped; the other is the holstered weapon-swap loadout.
+      -- A 2H weapon fills the main-hand slot and leaves its off-hand empty.
+      useAlt <- decBool
       equipment <- replicateM 12 decEquipmentItem
       _alt1 <- decBool
       alt1set <- replicateM 2 decEquipmentItem
       _alt2 <- decBool
       alt2set <- replicateM 2 decEquipmentItem
-      pure (equipment ++ alt1set ++ alt2set, concat sacks)
+      let activeWeapons = if useAlt then alt2set else alt1set
+      pure (equipment ++ activeWeapons, concat sacks)
 
 -- InventorySack: unused bool + array of inventory items
 readInventorySack :: Dec [Item]

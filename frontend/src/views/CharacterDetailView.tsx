@@ -11,6 +11,7 @@ import {
     Difficulty,
     Gear,
     MasteryGroup,
+    NamedValue,
     Overrides,
     ShoppingItem,
     StatSummary,
@@ -153,7 +154,11 @@ export function CharacterDetailView({ name }: { name: string }) {
                 </label>
             </h1>
 
-            <SummaryPanel summary={c.summary} attacks={c.attacks} />
+            <SummaryPanel
+                summary={c.summary}
+                attacks={c.attacks}
+                armorTable={c.armorTable}
+            />
             <AttacksPanel attacks={c.attacks} />
 
             <h2 className="section-head">
@@ -658,7 +663,9 @@ function EquipCard({
                                 label="Augment"
                                 current={gear.augment}
                                 options={catalog.augments.filter(fits)}
-                                onChange={(v) => onChange(index, { augment: v })}
+                                onChange={(v) =>
+                                    onChange(index, { augment: v })
+                                }
                                 fetchRanking={fetchAugmentRanking}
                             />
                         </>
@@ -674,7 +681,6 @@ function EquipCard({
 function MergedStatsTable({
     resists,
     damage,
-    difficulty,
 }: {
     resists: StatSummary["resists"];
     damage: DamageRow[];
@@ -728,8 +734,15 @@ function MergedStatsTable({
                                 className={
                                     "el-resist" + (rv === 0 ? " zero" : "")
                                 }
+                                title={title}
                             >
                                 {fmtResist(rv)}%
+                                {r && r.overcap > 0 && (
+                                    <span className="muted">
+                                        {" "}
+                                        (+{fmtResist(r.overcap)})
+                                    </span>
+                                )}
                             </td>
                             <td className="el-num">
                                 {d
@@ -758,9 +771,6 @@ function MergedStatsTable({
 
     return (
         <div className="element-tables">
-            <div className="element-tables-caption muted">
-                Resist / Damage ({difficulty})
-            </div>
             {renderHalf(RESISTANCES.slice(0, 5))}
             {renderHalf(RESISTANCES.slice(5))}
         </div>
@@ -774,9 +784,11 @@ function MergedStatsTable({
 function SummaryPanel({
     summary,
     attacks,
+    armorTable,
 }: {
     summary: StatSummary;
     attacks: Attack[];
+    armorTable: NamedValue[];
 }) {
     const active = attacks.filter((a) => a.kind === "active");
     const procs = attacks.filter((a) => a.kind === "proc");
@@ -787,7 +799,6 @@ function SummaryPanel({
             <div className="summary-body">
                 <div className="summary-lhs">
                     <div className="element-tables">
-                        <div className="element-tables-caption muted">Vitals</div>
                         <table className="element-table">
                             <tbody>
                                 {best > 0 && (
@@ -827,15 +838,38 @@ function SummaryPanel({
                         difficulty={summary.difficulty}
                     />
                 </div>
+                {armorTable.length > 0 && (
+                    <div className="element-tables">
+                        <table className="element-table">
+                            <tbody>
+                                {armorTable.map((r) => (
+                                    <tr key={r.label}>
+                                        <td className="el-label">{r.label}</td>
+                                        <td>{num(r.value)}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
                 {summary.ccResists.length > 0 && (
                     <div className="element-tables">
-                        <div className="element-tables-caption muted">Defenses</div>
                         <table className="element-table">
                             <tbody>
                                 {summary.ccResists.map((r) => (
-                                    <tr key={r.label}>
-                                        <td className="el-label">{r.label}</td>
-                                        <td>{Math.round(r.value)}%</td>
+                                    <tr key={r.name}>
+                                        <td className="el-label">{r.name}</td>
+                                        <td
+                                            title={`${r.name}: ${Math.round(r.value)}% (cap ${Math.round(r.cap)}${r.overcap ? `, +${Math.round(r.overcap)} over` : ""})`}
+                                        >
+                                            {Math.round(r.value)}%
+                                            {r.overcap > 0 && (
+                                                <span className="muted">
+                                                    {" "}
+                                                    (+{Math.round(r.overcap)})
+                                                </span>
+                                            )}
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -846,7 +880,6 @@ function SummaryPanel({
         </div>
     );
 }
-
 
 function SkillsPanel({ masteries }: { masteries: MasteryGroup[] }) {
     if (masteries.length === 0) return null;
@@ -875,11 +908,7 @@ function SkillsPanel({ masteries }: { masteries: MasteryGroup[] }) {
     );
 }
 
-function DevotionsPanel({
-    devotions,
-}: {
-    devotions: ConstellationEntry[];
-}) {
+function DevotionsPanel({ devotions }: { devotions: ConstellationEntry[] }) {
     if (devotions.length === 0) return null;
     const total = devotions.reduce((s, d) => s + d.stars, 0);
     return (

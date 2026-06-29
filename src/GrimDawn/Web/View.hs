@@ -63,6 +63,7 @@ import GrimDawn.Item
   , resistBonuses
   , skillBonuses
   , skillDisplayName
+  , sumField
   )
 import GrimDawn.Report.Sets
   ( SetCompletion (..)
@@ -252,6 +253,7 @@ data CharacterDetailView = CharacterDetailView
   , cdvSummary :: !StatSummaryView -- resistances, attributes, key totals
   , cdvAttacks :: ![AttackView] -- per-attack/proc DPS estimate
   , cdvGear :: ![GearView]
+  , cdvArmorTable :: ![NamedValueView] -- armor rating per slot (head…feet), ordered by slot
   , cdvShopping :: ![ShoppingView] -- components/augments selected that aren't on the saved character
   , cdvMasteries :: ![MasteryView] -- invested mastery bars + skills
   , cdvDevotions :: ![ConstellationView] -- taken devotion constellations
@@ -321,7 +323,7 @@ data StatSummaryView = StatSummaryView
   , ssvDa :: !Double -- computed DA total
   , ssvDamage :: ![Text] -- total damage bonuses (e.g. "+120% Acid")
   , ssvDamageTable :: ![DamageRowView] -- per-damage-type table
-  , ssvCcResists :: ![NamedValueView] -- armor absorption + CC resists
+  , ssvCcResists :: ![ResistView] -- armor absorption + CC resists (with caps/overcap)
   }
   deriving (Show, Eq, Generic)
 
@@ -440,6 +442,7 @@ detailView db owned overrides difficulty c =
     , cdvSummary = toSummaryView difficulty (statSummary difficulty c sources)
     , cdvAttacks = map toAttackView (attackDps db sources c)
     , cdvGear = map gearViewOf items
+    , cdvArmorTable = armorTable items
     , cdvShopping = shoppingList db c owned (map slotTypeOf items) (equippedItems c) items
     , cdvMasteries = buildMasteries db c
     , cdvDevotions = buildDevotions db c
@@ -459,6 +462,28 @@ detailView db owned overrides difficulty c =
     nonSkill = statSources db items ++ devotionSources db c ++ masterySources db c
     extra = devotionSources db c ++ masterySources db c ++ skillSources permanentBuffs nonSkill db c
     sources = statSources db items ++ extra
+    armorSlotLabels =
+      [ ("head", "Head"), ("shoulders", "Shoulders"), ("chest", "Chest")
+      , ("hands", "Arms"), ("legs", "Legs"), ("feet", "Feet")
+      ]
+    pieceArmor it = sumField (statSources db [it]) "defensiveProtection"
+    -- Global % armor modifier (from all gear + devotions + skills).
+    globalArmorPct = sumField sources "defensiveProtectionModifier"
+    -- Per-slot armor in GD = (this piece's flat armor + the flat armor every
+    -- other source contributes to that body part) * (1 + % armor). The "other"
+    -- flat armor is everything except the six displayed body pieces: belt,
+    -- jewelry, weapon/shield, relic, components, skills and devotions all add
+    -- armor that protects each body part.
+    armorTable its =
+      let displayed = map fst armorSlotLabels
+          globalFlat =
+            sumField sources "defensiveProtection"
+              - sum [pieceArmor it | it <- its, iaType (itemAttrs it db) `elem` map Just displayed]
+       in [ NamedValueView label ((pieceArmor it + globalFlat) * (1 + globalArmorPct / 100))
+          | (slotKey, label) <- armorSlotLabels
+          , it <- its
+          , iaType (itemAttrs it db) == Just slotKey
+          ]
 
 nonEmpty :: Text -> Maybe Text
 nonEmpty t = if T.null t then Nothing else Just t
@@ -709,7 +734,7 @@ toSummaryView diff s =
     , ssvDa = ssDaTotal s
     , ssvDamage = ssDamage s
     , ssvDamageTable = map toDamageRowView (ssDamageTable s)
-    , ssvCcResists = [NamedValueView l v | (l, v) <- ssCcResists s]
+    , ssvCcResists = [ResistView n v cap over | (n, v, cap, over) <- ssCcResists s]
     }
 
 toDamageRowView :: DamageRow -> DamageRowView

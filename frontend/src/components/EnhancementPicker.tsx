@@ -47,6 +47,10 @@ function GroupedLines({ e }: { e: Enhancement }) {
             {STAT_GROUPS.map(({ key, label }) => {
                 const lines = e[key] as string[];
                 if (lines.length === 0) return null;
+                // Only resistance/damage-type lines get element colouring; skill
+                // and stat names that merely contain an element word must not.
+                const colored =
+                    key === "resistBonuses" || key === "damageBonuses";
                 return (
                     <div key={key} className="enh-group">
                         <span className="enh-group-label muted">{label}</span>
@@ -54,7 +58,11 @@ function GroupedLines({ e }: { e: Enhancement }) {
                             <span
                                 key={i}
                                 className="dtype"
-                                style={{ color: elementColor(l) }}
+                                style={
+                                    colored
+                                        ? { color: elementColor(l) }
+                                        : undefined
+                                }
                             >
                                 {l}
                             </span>

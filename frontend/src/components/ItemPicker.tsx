@@ -120,15 +120,24 @@ export function ItemPicker({
                             >
                                 <ItemImage record={it.record} />
                                 <div className="enh-option-body">
-                                    <div
-                                        className="enh-option-name"
-                                        style={{
-                                            color: rarityColor(
-                                                it.classification,
-                                            ),
-                                        }}
-                                    >
-                                        {it.name}
+                                    <div className="enh-option-head">
+                                        <span
+                                            className="enh-option-name"
+                                            style={{
+                                                color: rarityColor(
+                                                    it.classification,
+                                                ),
+                                            }}
+                                        >
+                                            {it.name}
+                                        </span>
+                                        <span
+                                            className="enh-score"
+                                            title="upgrade score (higher is better)"
+                                        >
+                                            {it.score > 0 ? "+" : ""}
+                                            {num(it.score)}
+                                        </span>
                                     </div>
                                     <div className="enh-option-stats">
                                         <span className="muted">

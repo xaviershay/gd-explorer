@@ -164,9 +164,12 @@ export function GroupedStats({
         <div className="total-group" key={g}>
           <div className="total-group-head">{GROUP_LABEL[g]}</div>
           <ul className="ia-lines">
-            {groups[g].map((t, i) => (
-              <BonusItem key={i} line={t} />
-            ))}
+            {/* Only damage-type lines (the combat group) get element colouring;
+                resistances are coloured by their own icons, and skill/stat names
+                that merely contain an element word (e.g. "Fire Strike") must not. */}
+            {groups[g].map((t, i) =>
+              g === "combat" ? <BonusItem key={i} line={t} /> : <li key={i}>{t}</li>,
+            )}
           </ul>
         </div>
       ))}

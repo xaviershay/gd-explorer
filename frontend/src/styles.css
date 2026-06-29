@@ -411,7 +411,7 @@ h1 {
     font-weight: 700;
     font-size: 11px;
     padding: 0 10px 3px 0;
-    text-align: center;
+    text-align: left;
     border-bottom: 1px solid var(--border);
 }
 .element-table th:first-child {
@@ -419,7 +419,7 @@ h1 {
 }
 .element-table td {
     padding: 3px 10px 3px 0;
-    text-align: right;
+    text-align: left;
     white-space: nowrap;
 }
 .element-table td.el-icon {
@@ -933,8 +933,7 @@ h1 {
     flex: 0 0 auto;
 }
 .summary-rhs {
-    flex: 1 1 auto;
-    min-width: 0;
+    flex: 0 0 auto;
 }
 
 

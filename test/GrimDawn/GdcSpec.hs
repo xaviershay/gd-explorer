@@ -21,7 +21,9 @@ spec =
 
     it "reads stable item counts" $ do
       Right c <- loadCharacterFile "test/fixtures/Odie.gdc"
-      length (charEquipped c) `shouldBe` 15
+      -- Equipped = 12 gear slots + the active weapon set only (the holstered
+      -- weapon-swap set is excluded), minus any empty slots.
+      length (charEquipped c) `shouldBe` 13
       length (charInventory c) `shouldBe` 162
       length (charPersonalStash c) `shouldBe` 150
 

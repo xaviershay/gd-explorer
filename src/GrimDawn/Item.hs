@@ -192,7 +192,7 @@ damageFieldMap =
 -- defensive context (so poison resistance reads "Poison & Acid").
 resistBonuses :: [(Text, Record)] -> [Text]
 resistBonuses related =
-  [ showNum v <> "% " <> resistName ty
+  [ showJitter related fields v <> "% " <> resistName ty
   | (ty, fields) <- resistFieldMap
   , let v = sum (map (sumField related) fields)
   , v > 0
@@ -305,6 +305,31 @@ fieldNum f r = case lookupField f r of
 sumField :: [(Text, Record)] -> Text -> Double
 sumField related f = sum [v | (_, r) <- related, Just v <- [fieldNum f r]]
 
+-- | The ± deviation a magical affix's seed-roll can apply to a field's value:
+-- each contributing @LootRandomizer@ record varies its value by its
+-- @lootRandomizerJitter@ percent. Zero when no jittered (affix) source feeds the
+-- field. (Base items, components and augments have no jitter.)
+fieldJitter :: [(Text, Record)] -> Text -> Double
+fieldJitter related f =
+  sum
+    [ v * j / 100
+    | (_, r) <- related
+    , Just j <- [fieldNum "lootRandomizerJitter" r]
+    , Just v <- [fieldNum f r]
+    ]
+
+-- | Render a value, appending "±dev" (rounded) when affix jitter can vary it.
+showJitter :: [(Text, Record)] -> [Text] -> Double -> Text
+showJitter related fields v =
+  let d = sum (map (fieldJitter related) fields)
+   in showNum v <> jitterSuffix d
+
+-- "±dev" (rounded up, so the shown band covers the full potential roll), or "".
+jitterSuffix :: Double -> Text
+jitterSuffix d
+  | d >= 0.5 = "±" <> showNum (fromIntegral (ceiling d :: Integer))
+  | otherwise = ""
+
 -- | Summed (min, max) for a damage stem across records, over the given field
 -- prefixes (e.g. @offensive@, @offensiveBase@, @offensiveBonus@). A source that
 -- supplies only a Min or only a Max (a flat amount) is treated as min == max, so
@@ -370,16 +395,18 @@ damageBonuses related =
       ]
     -- % immediate damage, e.g. "50% Acid", plus the Elemental aggregate
     immPct =
-      [ showNum p <> "% " <> effectDisplay ["offensive"] tok
+      [ showJitter related [field] p <> "% " <> effectDisplay ["offensive"] tok
       | (stem, tok) <- damageElems ++ [("Elemental", "elemental")]
-      , let p = sumField related ("offensive" <> stem <> "Modifier")
+      , let field = "offensive" <> stem <> "Modifier"
+            p = sumField related field
       , p > 0
       ]
     -- % damage-over-time, e.g. "44% Burn"
     dotPct =
-      [ showNum p <> "% " <> effectDisplay ["offensive", "slow"] tok
+      [ showJitter related [field] p <> "% " <> effectDisplay ["offensive", "slow"] tok
       | (stem, tok) <- dotElems
-      , let p = sumField related ("offensiveSlow" <> stem <> "Modifier")
+      , let field = "offensiveSlow" <> stem <> "Modifier"
+            p = sumField related field
       , p > 0
       ]
     -- % increased damage-over-time duration, e.g. "+20% Burn Duration"
@@ -511,11 +538,17 @@ effectIgnoreFields = ["skillChargeAura", "skillChargeMultipliers"]
 
 -- format a single value into the template's @%s@ slot, applying the options.
 formatEffect :: Text -> [Opt] -> Double -> Text
-formatEffect tmpl opts v = T.replace "%s" valStr tmpl
+formatEffect tmpl opts v = formatEffectJ tmpl opts v 0
+
+-- as 'formatEffect', but inserts a "±dev" affix-jitter range after the number
+-- (e.g. "+29±4 Offensive Ability") when @dev@ is non-trivial.
+formatEffectJ :: Text -> [Opt] -> Double -> Double -> Text
+formatEffectJ tmpl opts v dev = T.replace "%s" valStr tmpl
   where
     v' = if Negative `elem` opts then negate v else v
     signed = if Signed `elem` opts && v' > 0 then "+" <> showNum v' else showNum v'
-    valStr = if Percentage `elem` opts then signed <> "%" else signed
+    jit = jitterSuffix dev
+    valStr = if Percentage `elem` opts then signed <> jit <> "%" else signed <> jit
 
 -- show a value with an explicit leading sign for positives.
 showSigned :: Double -> Text
@@ -551,7 +584,7 @@ characterBonuses related =
     render k
       | hardExcluded k = []
       | Just (tmpl, opts) <- lookup k effectStringMap =
-          let v = effValue k in [(displayOrder k, formatEffect tmpl opts v) | v /= 0]
+          let v = effValue k in [(displayOrder k, formatEffectJ tmpl opts v (fieldJitter related k)) | v /= 0]
       | genericExcluded k = []
       | Just line <- generic k = [(displayOrder k, line)]
       | otherwise = []
