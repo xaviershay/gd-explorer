@@ -128,6 +128,7 @@ function SetCard({
 function ItemSquare({ member: m }: { member: SetMember }) {
   const owned = m.count > 0;
   const craftable = !owned && m.craftable;
+  const transmutable = !owned && !craftable && m.transmutable;
   const tooltip =
     `${m.name}` +
     (m.gear.levelRequirement ? ` (lvl ${m.gear.levelRequirement})` : "") +
@@ -139,15 +140,20 @@ function ItemSquare({ member: m }: { member: SetMember }) {
             .join(", ")
         : craftable
           ? "not owned — craftable (blueprint known)"
-          : "not owned"
+          : transmutable
+            ? "not owned — transmutable (duplicates or blueprint in set)"
+            : "not owned"
     }`;
   return (
     <div
-      className={"item-square" + (owned ? "" : craftable ? " craftable" : " missing")}
+      className={
+        "item-square" +
+        (owned ? "" : craftable ? " craftable" : transmutable ? " transmutable" : " missing")
+      }
       style={
         owned
           ? { background: rarityColor(m.gear.classification) }
-          : craftable
+          : craftable || transmutable
             ? { borderColor: rarityColor(m.gear.classification) }
             : undefined
       }

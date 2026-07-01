@@ -83,6 +83,34 @@ spec = do
       ("members" `isInfixOf` s) `shouldBe` True
       ("svOwnedCount" `isInfixOf` s) `shouldBe` False
 
+  describe "setsView transmute eligibility" $ do
+    it "leaves a missing member non-transmutable with no excess and no blueprints" $ do
+      let [sv] = setsView synthDb [] owned
+          [_, m2] = svMembers sv
+      smvTransmutable m2 `shouldBe` False
+
+    it "flags a missing member transmutable when another member has excess copies" $ do
+      let dupOwned =
+            [ OwnedItem blankItem {itemBaseName = "m1"} SharedStash
+            , OwnedItem blankItem {itemBaseName = "m1"} SharedStash
+            ]
+          [sv] = setsView synthDb [] dupOwned
+          [_, m2] = svMembers sv
+      smvOwned m2 `shouldBe` False
+      smvTransmutable m2 `shouldBe` True
+
+    it "flags a missing member transmutable when a different set member has a learned blueprint" $ do
+      let [sv] = setsView synthDb ["m1"] owned
+          [_, m2] = svMembers sv
+      smvCraftable m2 `shouldBe` False -- the blueprint is for m1, not m2
+      smvTransmutable m2 `shouldBe` True
+
+    it "does not double-signal a missing member that already has its own blueprint" $ do
+      let [sv] = setsView synthDb ["m2"] owned
+          [_, m2] = svMembers sv
+      smvCraftable m2 `shouldBe` True
+      smvTransmutable m2 `shouldBe` False
+
   describe "detailView" $ do
     let dv = detailView synthDb [] [] Ultimate hero
     it "carries character header and equipped gear" $ do
