@@ -133,6 +133,13 @@ h1 {
     background: #262a31;
     border: 2px solid;
 }
+/* Not owned, no blueprint of its own, but the set as a whole can be
+   transmuted into it (excess copies or a blueprint elsewhere in the set):
+   dim fill with a dotted rarity-coloured outline (colour set inline). */
+.item-square.transmutable {
+    background: #262a31;
+    border: 2px dotted;
+}
 
 /* Skill bonus lines with a hover card (description + what they grant) */
 .skill-line {

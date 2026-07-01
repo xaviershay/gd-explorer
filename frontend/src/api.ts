@@ -23,6 +23,7 @@ export interface SetMember {
     setTier: number;
     setBonus: BonusGroups;
     craftable: boolean; // not owned, but a learned blueprint can craft it
+    transmutable: boolean; // not owned; set has excess copies or a blueprint elsewhere
 }
 
 export interface SetView {
