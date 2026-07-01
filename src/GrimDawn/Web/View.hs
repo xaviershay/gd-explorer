@@ -140,6 +140,9 @@ data SetMemberView = SetMemberView
   , smvSetTier :: !Int -- piece count this item activates (its 1-based position)
   , smvSetBonus :: !BonusGroupsView -- set bonus newly unlocked at that tier, by category
   , smvCraftable :: !Bool -- not owned, but a learned blueprint can craft it
+  , smvTransmutable :: !Bool -- not owned, no blueprint of its own, but the set
+                             -- has excess copies elsewhere or a blueprint for
+                             -- any member, so a re-rolled transmute can produce it
   }
   deriving (Show, Eq, Generic)
 
@@ -191,10 +194,17 @@ toSetView db craftSet sc =
     }
   where
     setRec = lookupRecord (scRecord sc) db
-    members = zipWith (toMemberView db craftSet setRec) [1 ..] (scMembers sc)
+    members = zipWith (toMemberView db craftSet setRec setTransmutable) [1 ..] (scMembers sc)
+    -- Transmutation sacrifices any copy of a set item for a random other item
+    -- from the same set, so a spare copy of ANY member, or a learned blueprint
+    -- for ANY member (owned or not, since you can just craft one), makes every
+    -- missing member in the set transmute-eligible.
+    setTransmutable =
+      sum (map smCount (scMembers sc)) > length (filter smOwned (scMembers sc))
+        || any (\mm -> HM.member (smRecord mm) craftSet) (scMembers sc)
 
-toMemberView :: GameDb -> HM.HashMap Text () -> Maybe Record -> Int -> SetMember -> SetMemberView
-toMemberView db craftSet setRec tier m =
+toMemberView :: GameDb -> HM.HashMap Text () -> Maybe Record -> Bool -> Int -> SetMember -> SetMemberView
+toMemberView db craftSet setRec setTransmutable tier m =
   SetMemberView
     { smvName = smName m
     , smvRecord = smRecord m
@@ -204,8 +214,11 @@ toMemberView db craftSet setRec tier m =
     , smvGear = toGearView (smRecord m) Nothing Nothing (itemAttrs (itemWithName (smRecord m)) db)
     , smvSetTier = tier
     , smvSetBonus = maybe emptyBonusGroups (tierBonusGroups db tier) setRec
-    , smvCraftable = not (smOwned m) && HM.member (smRecord m) craftSet
+    , smvCraftable = craftableFlag
+    , smvTransmutable = not (smOwned m) && setTransmutable && not craftableFlag
     }
+  where
+    craftableFlag = not (smOwned m) && HM.member (smRecord m) craftSet
 
 -- | The set bonus newly unlocked at @tier@ pieces: the per-tier delta of the set
 -- record's (cumulative) bonus arrays, so the N-th item shows what the N-piece
