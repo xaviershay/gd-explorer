@@ -3,6 +3,7 @@ import { SetsView } from "./views/SetsView";
 import { ComponentsView, RelicsView } from "./views/CraftablesView";
 import { CharactersView } from "./views/CharactersView";
 import { CharacterDetailView } from "./views/CharacterDetailView";
+import { AttackBreakdownView } from "./views/AttackBreakdownView";
 
 export function App() {
     const route = useHashRoute();
@@ -21,6 +22,14 @@ export function App() {
 }
 
 function renderRoute(route: string) {
+    const attackMatch = route.match(/^\/characters\/([^/]+)\/attacks\/(.+)$/);
+    if (attackMatch) {
+        const name = decodeURIComponent(attackMatch[1]);
+        const key = attackMatch[2];
+        return (
+            <AttackBreakdownView key={name + key} name={name} attackKey={key} />
+        );
+    }
     const charMatch = route.match(/^\/characters\/(.+)$/);
     if (charMatch) {
         const name = decodeURIComponent(charMatch[1]);

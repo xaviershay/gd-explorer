@@ -670,6 +670,15 @@ img.pin-image {
     border-radius: 8px;
     padding: 10px 12px;
 }
+a.attack-card {
+    display: block;
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+}
+a.attack-card:hover {
+    border-color: var(--muted);
+}
 .attack-row {
     display: flex;
     justify-content: space-between;

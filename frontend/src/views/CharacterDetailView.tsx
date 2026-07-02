@@ -29,6 +29,7 @@ import { ItemImage } from "../components/ItemImage";
 import { ItemAttributes } from "../components/ItemAttributes";
 import { EnhancementPicker } from "../components/EnhancementPicker";
 import { ItemPicker } from "../components/ItemPicker";
+import { encodeAttackKey } from "../attackKey";
 
 const num = (n: number) => Math.round(n).toLocaleString();
 
@@ -159,7 +160,7 @@ export function CharacterDetailView({ name }: { name: string }) {
                 attacks={c.attacks}
                 armorTable={c.armorTable}
             />
-            <AttacksPanel attacks={c.attacks} />
+            <AttacksPanel attacks={c.attacks} name={name} />
 
             <h2 className="section-head">
                 Equipped gear
@@ -933,7 +934,13 @@ function DevotionsPanel({ devotions }: { devotions: ConstellationEntry[] }) {
 }
 
 // Estimated attack/proc DPS, mirroring the `dps` CLI command.
-function AttacksPanel({ attacks }: { attacks: Attack[] }) {
+function AttacksPanel({
+    attacks,
+    name,
+}: {
+    attacks: Attack[];
+    name: string;
+}) {
     const active = attacks.filter((a) => a.kind === "active");
     const procs = attacks.filter((a) => a.kind === "proc");
     if (active.length === 0 && procs.length === 0) return null;
@@ -947,7 +954,8 @@ function AttacksPanel({ attacks }: { attacks: Attack[] }) {
             <p className="muted">
                 Incorporates skills, devotions &amp; always-on buffs;
                 conversions and stacking DoTs applied. Assumed base attack
-                speed; no crit or enemy resistances.
+                speed; no crit or enemy resistances. Click a card for a
+                source-by-source breakdown.
             </p>
             {active.length > 0 && (
                 <div className="attacks-total">
@@ -967,7 +975,7 @@ function AttacksPanel({ attacks }: { attacks: Attack[] }) {
                     <div className="attacks-sub">Attacks (pick one)</div>
                 )}
                 {active.map((a, i) => (
-                    <AttackCard key={i} a={a} />
+                    <AttackCard key={i} a={a} name={name} />
                 ))}
                 {procs.length > 0 && (
                     <div className="attacks-sub">
@@ -975,16 +983,17 @@ function AttacksPanel({ attacks }: { attacks: Attack[] }) {
                     </div>
                 )}
                 {procs.map((a, i) => (
-                    <AttackCard key={i} a={a} />
+                    <AttackCard key={i} a={a} name={name} />
                 ))}
             </div>
         </>
     );
 }
 
-function AttackCard({ a }: { a: Attack }) {
+function AttackCard({ a, name }: { a: Attack; name: string }) {
+    const href = `#/characters/${encodeURIComponent(name)}/attacks/${encodeAttackKey(a.kind, a.name, a.rank)}`;
     return (
-        <div className="attack-card">
+        <a className="attack-card" href={href}>
             <div className="attack-row">
                 <span className="attack-name">
                     {a.name}
@@ -1010,6 +1019,6 @@ function AttackCard({ a }: { a: Attack }) {
                     </span>
                 ))}
             </div>
-        </div>
+        </a>
     );
 }
