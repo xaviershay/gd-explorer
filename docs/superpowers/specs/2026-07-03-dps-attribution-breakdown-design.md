@@ -113,6 +113,33 @@ For the identified row:
   `offensiveSlow<Stem>Modifier` field value, listed separately from the flat
   table (not merged into a single per-source DPS figure — see "Why flat and
   % stay separate" below).
+- **Retaliation added to attack**: this is not a single opaque flat number —
+  it's its own chained flat→%→% pipeline (`retalTotalOf` / `rdaGlobal` /
+  `rdaFlat` in the current code) and gets a matching nested breakdown, since
+  a retaliation/shield build lives or dies by which piece grants the flat
+  retaliation stat versus which grants the "% of retaliation added to
+  attack." Per damage type (only when nonzero):
+  - **Retaliation flat** contributors — each source's own
+    `retaliation<Stem>Min/Max` (e.g. a shield's "+50-80 Physical
+    Retaliation"), summed to a subtotal.
+  - **Retaliation % modifiers** contributors — each source's own
+    `retaliation<Stem>Modifier` / `retaliationTotalDamageModifier`, summed
+    and applied to the flat subtotal to give that type's total retaliation
+    damage.
+  - **% added to attack** contributors — each source's own
+    `retaliationDamagePct` (global gear/skill sources, plus any sibling with
+    its own value, e.g. the Reprisal transmuter). This percentage is a
+    single scalar shared across every damage type on the row (the code
+    applies the same `rdaPct` to every stem), so it's computed once and
+    reused per type rather than repeated as separate contributor lists.
+  - The type's total retaliation damage × the shared add-to-attack% is
+    exactly the `rdaFlat` term that used to be an opaque single number. It
+    now appears in that type's main **flat contributors** table as one
+    line — `"Retaliation added to attack"`, tagged with a new `retaliation`
+    source category — whose value is fully explained by this nested section
+    (it's a computed aggregate of several real sources, not itself one
+    source, so it isn't further splittable within the flat table; the
+    nested section is where that split lives).
 - **Rate factors**: attack-speed % (per source, for weapon%-based rows),
   cooldown-reduction % (per source, including chance-scaled resets like
   Reprisal), and weapon-damage % (per contributing skill/sibling), each as
@@ -128,14 +155,13 @@ For the identified row:
   overlapping % bonuses each show their full individual impact, which
   double-counts the overlap if you were to add them together. That's
   expected for a marginal/counterfactual metric and is called out in the UI
-  copy, not hidden.
+  copy, not hidden. This recompute already cascades correctly through the
+  retaliation pipeline above — removing a shield's flat retaliation stat, or
+  removing Reprisal's add-to-attack %, changes `rdaFlat` (and therefore the
+  row's DPS) exactly as it would in-game, with no special-casing needed.
 
 ### Known simplifications (carried over / new)
 
-- "Retaliation damage added to attack" is reported as a single flat line (not
-  sub-attributed between the gear granting retaliation stats and the gear
-  granting the %-added-to-attack) — same spirit as the existing "no crit, no
-  enemy resistances" approximations already documented on `attackDps`.
 - Conversion/DoT-modifier percentages are aggregate values already summed
   across all relevant records before being listed per source (i.e. the *set*
   of contributing sources is per-source, but a single source's own
@@ -170,7 +196,7 @@ GET /api/characters/:name/attack-breakdown
 ```ts
 export type SourceCategory =
   | "gear" | "component" | "augment" | "setBonus"
-  | "devotion" | "mastery" | "skill" | "other";
+  | "devotion" | "mastery" | "skill" | "retaliation" | "other";
 
 export interface SourceContribution {
   label: string;
@@ -201,6 +227,26 @@ export interface RateFactor {
   formula: string; // e.g. "1.0 x (1 + 42%) = 1.42/s"
 }
 
+// Retaliation damage's own flat -> % -> % chain for one damage type. Only
+// present for types where the row has a nonzero retaliation contribution.
+export interface RetaliationTypeBreakdown {
+  label: string;                  // damage type, e.g. "Physical"
+  flat: SourceContribution[];     // sources granting flat retaliation<Type>Min/Max
+  flatSubtotal: number;
+  percent: SourceContribution[];  // retaliation<Type>Modifier / retaliationTotalDamageModifier
+  totalPercent: number;
+  retaliationDamage: number;      // flatSubtotal x (1 + totalPercent/100)
+  addedToAttack: number;          // retaliationDamage x totalAddToAttackPct/100 --
+                                   // matches the "Retaliation added to attack" line
+                                   // in this type's TypeBreakdown.flat
+}
+
+export interface RetaliationBreakdown {
+  addToAttackPct: SourceContribution[]; // e.g. "Reprisal: +35%"; shared across all types
+  totalAddToAttackPct: number;
+  byType: RetaliationTypeBreakdown[];
+}
+
 export interface AttackBreakdown {
   name: string;
   rank: number | null;
@@ -210,6 +256,7 @@ export interface AttackBreakdown {
   rate: string;
   sourcesByImpact: SourceImpact[]; // sorted by |dpsImpact| descending
   types: TypeBreakdown[];
+  retaliation: RetaliationBreakdown | null; // null when the row has none
   rateFactors: RateFactor[];
   trigger: { chancePct: number; cooldown: number; grantedBy: string } | null; // procs only
 }
@@ -238,12 +285,22 @@ route, mirroring how the existing `rank` endpoint is wired.
      and won't sum to the total.
   3. One section per damage type (only types present on the row) — two small
      tables (flat contributors, % contributors), each with a total/footer row
-     that matches the type's `total`/`totalPercent`.
-  4. **Rate** section — attack-speed/cooldown-reduction/weapon-damage%
+     that matches the type's `total`/`totalPercent`. The synthesized
+     "Retaliation added to attack" flat line (when present) links down to
+     section 4 rather than pretending to be one atomic source.
+  4. **"Retaliation added to attack"** section — rendered only when
+     `retaliation` is non-null. The shared "% added to attack" contributor
+     table first (e.g. Reprisal), then one compact block per affected damage
+     type: its flat contributors, % modifier contributors, and the resulting
+     `flatSubtotal x (1+%) = retaliationDamage -> x addToAttack% =
+     addedToAttack` line, so a shield build can see exactly which piece is
+     carrying its retaliation damage and which skill/devotion is converting
+     it into attack damage.
+  5. **Rate** section — attack-speed/cooldown-reduction/weapon-damage%
      contributor tables, or the proc's trigger line, depending on `kind`.
-  - Category badges (gear/component/augment/set/devotion/mastery/skill) reuse
-    `colorByType`-style styling conventions already in the codebase rather
-    than introducing new color logic.
+  - Category badges (gear/component/augment/set/devotion/mastery/skill/
+    retaliation) reuse `colorByType`-style styling conventions already in the
+    codebase rather than introducing new color logic.
 - Plain tables/lists throughout — consistent with the rest of the app, no new
   charting dependency.
 - Back navigation to the character page (`#/characters/:name`).
@@ -264,6 +321,12 @@ route, mirroring how the existing `rank` endpoint is wired.
     (a directly computable expected value from the fixture).
   - Conversion linearity: a fixture with a type conversion produces per-source
     converted amounts that sum to the aggregate converted total.
+  - Retaliation: a fixture with a flat-retaliation gear source, a
+    retaliation-%-modifier source, and a separate %-added-to-attack source
+    (mirroring the existing "attackDps adds retaliation damage to attack"
+    fixture) produces a `RetaliationTypeBreakdown` whose `addedToAttack`
+    matches the `rdaFlat` value that fixture already asserts on, and whose
+    three contributor lists correctly separate the three sources.
 - `test/GrimDawn/Web/ViewSpec.hs`: `toAttackBreakdownView` produces the
   expected JSON shape (category strings, sorted impact list) for a small
   fixture character.
