@@ -705,6 +705,64 @@ a.attack-card:hover {
     font-variant-numeric: tabular-nums;
 }
 
+/* Attack breakdown page */
+.breakdown-back {
+    display: inline-block;
+    margin-bottom: 10px;
+    color: var(--muted);
+}
+.breakdown-title {
+    font-size: 20px;
+    margin: 0 0 6px;
+}
+.breakdown-summary {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin-bottom: 6px;
+}
+.breakdown-dps {
+    font-size: 22px;
+    font-weight: 700;
+    color: #ffce3a;
+    font-variant-numeric: tabular-nums;
+}
+.category-badge {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+.contrib-table {
+    border-collapse: collapse;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    width: 100%;
+    max-width: 640px;
+    margin-bottom: 10px;
+}
+.contrib-table th {
+    color: var(--muted);
+    font-weight: 700;
+    font-size: 11px;
+    text-align: left;
+    padding: 0 10px 3px 0;
+    border-bottom: 1px solid var(--border);
+}
+.contrib-table td {
+    padding: 3px 10px 3px 0;
+}
+.contrib-table tr + tr td {
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+.contrib-table .num-col {
+    text-align: right;
+}
+.contrib-table tfoot td {
+    border-top: 1px solid var(--border);
+    font-weight: 700;
+}
+
 /* Equipment paper-doll: a 7-row × 2-column grid (head|amulet, ring|ring, …). */
 .equip-grid2 {
     display: grid;
