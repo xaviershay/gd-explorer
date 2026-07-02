@@ -762,6 +762,22 @@ a.attack-card:hover {
     border-top: 1px solid var(--border);
     font-weight: 700;
 }
+.breakdown-columns {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 32px;
+}
+.breakdown-col-head {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    margin-bottom: 4px;
+}
+.breakdown-formula {
+    font-size: 12px;
+    margin-top: -2px;
+}
 
 /* Equipment paper-doll: a 7-row × 2-column grid (head|amulet, ring|ring, …). */
 .equip-grid2 {

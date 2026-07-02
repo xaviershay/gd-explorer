@@ -1,4 +1,10 @@
-import { getAttackBreakdown, SourceCategory, SourceImpact } from "../api";
+import {
+    getAttackBreakdown,
+    SourceCategory,
+    SourceContribution,
+    SourceImpact,
+    TypeBreakdown,
+} from "../api";
 import { useAsync } from "../hooks";
 import { loadConfig } from "./CharacterDetailView";
 import { decodeAttackKey } from "../attackKey";
@@ -108,6 +114,10 @@ export function AttackBreakdownView({
             </div>
 
             <ImpactSection sources={bd.sourcesByImpact} />
+
+            {bd.types.map((t, i) => (
+                <TypeSection key={i} t={t} />
+            ))}
         </div>
     );
 }
@@ -147,6 +157,106 @@ function ImpactSection({ sources }: { sources: SourceImpact[] }) {
                     ))}
                 </tbody>
             </table>
+        </>
+    );
+}
+
+function ContribTable({
+    rows,
+    valueLabel,
+    total,
+}: {
+    rows: SourceContribution[];
+    valueLabel: string;
+    total: number;
+}) {
+    if (rows.length === 0) return null;
+    return (
+        <table className="contrib-table">
+            <thead>
+                <tr>
+                    <th>Source</th>
+                    <th>Category</th>
+                    <th className="num-col">{valueLabel}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {[...rows]
+                    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+                    .map((r, i) => (
+                        <tr key={i}>
+                            <td>{r.label}</td>
+                            <td>
+                                <CategoryBadge category={r.category} />
+                            </td>
+                            <td className="num-col">{num(r.value)}</td>
+                        </tr>
+                    ))}
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td colSpan={2}>Total</td>
+                    <td className="num-col">{num(total)}</td>
+                </tr>
+            </tfoot>
+        </table>
+    );
+}
+
+function TypeSection({ t }: { t: TypeBreakdown }) {
+    const isDot = t.label.endsWith("(dot)");
+    return (
+        <>
+            <h2 className="section-head">
+                {t.label}
+                <span className="muted"> — {num(t.total)} per hit</span>
+            </h2>
+            <div className="breakdown-columns">
+                <div>
+                    <div className="breakdown-col-head">Flat damage</div>
+                    <ContribTable
+                        rows={t.flat}
+                        valueLabel="Flat"
+                        total={t.flatSubtotal}
+                    />
+                </div>
+                {!isDot && t.percent.length > 0 && (
+                    <div>
+                        <div className="breakdown-col-head">% increase</div>
+                        <ContribTable
+                            rows={t.percent}
+                            valueLabel="%"
+                            total={t.totalPercent}
+                        />
+                    </div>
+                )}
+                {isDot && t.durationPercent.length > 0 && (
+                    <div>
+                        <div className="breakdown-col-head">Duration %</div>
+                        <ContribTable
+                            rows={t.durationPercent}
+                            valueLabel="%"
+                            total={t.totalDurationPercent}
+                        />
+                    </div>
+                )}
+                {isDot && t.damagePercent.length > 0 && (
+                    <div>
+                        <div className="breakdown-col-head">Damage %</div>
+                        <ContribTable
+                            rows={t.damagePercent}
+                            valueLabel="%"
+                            total={t.totalDamagePercent}
+                        />
+                    </div>
+                )}
+            </div>
+            {isDot && (
+                <p className="muted breakdown-formula">
+                    {num(t.flatSubtotal)} x (1 + {num(t.totalDurationPercent)}
+                    %) x (1 + {num(t.totalDamagePercent)}%) = {num(t.total)}
+                </p>
+            )}
         </>
     );
 }
