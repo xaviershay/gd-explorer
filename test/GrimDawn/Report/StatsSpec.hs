@@ -179,6 +179,16 @@ synthDb =
                 , ("skillCooldownTime", VFloat 2)
                 ]
             )
+          , -- an attack whose damage scales by rank (index 0 = rank 1, index 1 = rank 2)
+            ( "records/skills/playerclass01/rankatk.dbr"
+            , HM.fromList
+                [ ("templateName", VString "database/templates/skill_attack.tpl")
+                , ("weaponDamagePct", VFloat 0)
+                , ("offensiveFireMin", VList [VFloat 50, VFloat 100])
+                , ("offensiveFireMax", VList [VFloat 50, VFloat 100])
+                , ("skillCooldownTime", VFloat 2)
+                ]
+            )
           ]
     , gdbText = HM.empty
     }
@@ -546,6 +556,24 @@ spec = describe "renderStats (synthetic)" $ do
             [] -> expectationFailure "expected at least one impact row"
           -- descending order: the impact list is sorted by |impact|
           map (abs . snd) impacts `shouldSatisfy` \xs -> xs == sortOn negate xs
+
+    it "reports a partial (not full-dps) impact for a source that only shifts effective rank" $ do
+      -- rankatk.dbr's own investment is rank 1 (50 flat fire); "Skill Ring"
+      -- grants +1 to all skills, bumping the effective rank to 2 (100 flat
+      -- fire) without changing which records exist. Removing the ring
+      -- should show the *real* delta between rank 2 and rank 1 damage, not
+      -- the row's entire DPS (which is what a rank-exact row lookup in the
+      -- "without this source" recompute would incorrectly report, since the
+      -- row would only be found at rank 1, never rank 2).
+      let ch = mkChar [mkSkillLvl "records/skills/playerclass01/rankatk.dbr" 1]
+          sources = [(Source "ring" "Skill Ring" SrcGear, HM.fromList [("augmentAllLevel", VFloat 1)])]
+      case attackDpsBreakdown synthDb sources ch "rankatk.dbr" (Just 2) Active of
+        Nothing -> expectationFailure "expected a breakdown"
+        Just bd -> do
+          abDps bd `shouldBe` 50 -- rank 2: 100 flat fire / 2s cooldown
+          case find ((== "Skill Ring") . srcLabel . siSource) (abSourcesByImpact bd) of
+            Just i -> siDpsImpact i `shouldBe` 25 -- 50 (rank 2) - 25 (rank 1) dps
+            Nothing -> expectationFailure "expected Skill Ring in the impact list"
 
   it "parseProcController reads attack-driven trigger + chance, skipping others" $ do
     parseProcController "records/controllers/itemskills/cast_@enemyonattack_20%.dbr" `shouldBe` Just ("attack", 0.2)

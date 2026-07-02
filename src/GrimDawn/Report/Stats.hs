@@ -1547,7 +1547,17 @@ attackDpsBreakdown :: GameDb -> [(Source, Record)] -> Character -> Text -> Maybe
 attackDpsBreakdown db sources c name rank kind =
   toBreakdown <$> find matches (attackDpsRows Nothing db sources c)
   where
+    -- identifies the requested row exactly (name+rank+kind), matching the
+    -- specific card the user clicked.
     matches rd = adName (rdSummary rd) == name && adRank (rdSummary rd) == rank && adKind (rdSummary rd) == kind
+    -- identifies "the same attack" in a with-one-source-excluded recompute,
+    -- deliberately *not* requiring the same rank: many sources (gear/set
+    -- bonuses granting "+N to all skills" or "+N to a mastery") shift a
+    -- skill's effective rank by a point or two, which is a real, modest DPS
+    -- change -- not the row vanishing. Matching on the exact original rank
+    -- here would make the lookup fail for any such source (dpsWithout = 0),
+    -- inflating its reported "impact" to the row's entire DPS.
+    sameAttack rd = adName (rdSummary rd) == name && adKind (rdSummary rd) == kind
     toBreakdown rd =
       AttackBreakdown
         { abName = adName (rdSummary rd)
@@ -1564,7 +1574,7 @@ attackDpsBreakdown db sources c name rank kind =
         }
     impactOf rd s =
       let rowsWithout = attackDpsRows (Just (srcKey s)) db sources c
-          dpsWithout = case find matches rowsWithout of
+          dpsWithout = case find sameAttack rowsWithout of
             Just rd' -> adDps (rdSummary rd')
             Nothing -> 0
        in SourceImpact s (adDps (rdSummary rd) - dpsWithout)
