@@ -81,11 +81,15 @@ the tuple's `fst` becomes `Source` instead of `Text`.
 
 ### Breakdown computation
 
-`attackDps` itself keeps its current signature and output (`[AttackDps]`,
-unattributed) — nothing about the existing summary panel changes. A new
-function computes the attributed detail for one row on demand, reusing the
-same per-row closures (`typedDamage`, `mkRow`, `mkProc`, `emit`, `emitWps`)
-so the breakdown cannot silently drift from the summary:
+`attackDps`'s output type (`[AttackDps]`, unattributed) doesn't change, so
+nothing about the existing summary panel changes. Its `sources` parameter
+naturally becomes `[(Source, Record)]` along with everything else it's built
+from, but its body needs no logic changes — it never inspects a source
+tuple's `fst` beyond structural equality (`nub`/`nubBy`), which `Source`'s
+`Eq` instance preserves. A new function computes the attributed detail for
+one row on demand, reusing the same per-row closures (`typedDamage`,
+`mkRow`, `mkProc`, `emit`, `emitWps`) so the breakdown cannot silently drift
+from the summary:
 
 ```haskell
 attackDpsBreakdown
