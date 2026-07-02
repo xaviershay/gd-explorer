@@ -301,3 +301,110 @@ export function getItemRanking(
         `/api/characters/${encodeURIComponent(name)}/items?${qs.toString()}`,
     );
 }
+
+// The DPS attribution breakdown for one attack/proc row, mirroring
+// GrimDawn.Web.View.AttackBreakdownView.
+export type SourceCategory =
+    | "gear"
+    | "component"
+    | "augment"
+    | "setBonus"
+    | "devotion"
+    | "mastery"
+    | "skill"
+    | "retaliation"
+    | "other";
+
+export interface SourceContribution {
+    label: string;
+    category: SourceCategory;
+    value: number;
+}
+
+export interface SourceImpact {
+    label: string;
+    category: SourceCategory;
+    dpsImpact: number;
+}
+
+export interface TypeBreakdown {
+    label: string;
+    total: number;
+    flat: SourceContribution[];
+    flatSubtotal: number;
+    percent: SourceContribution[];
+    totalPercent: number;
+    durationPercent: SourceContribution[];
+    totalDurationPercent: number;
+    damagePercent: SourceContribution[];
+    totalDamagePercent: number;
+}
+
+export interface RetaliationTypeBreakdown {
+    label: string;
+    flat: SourceContribution[];
+    flatSubtotal: number;
+    percent: SourceContribution[];
+    totalPercent: number;
+    retaliationDamage: number;
+    addedToAttack: number;
+}
+
+export interface RetaliationBreakdown {
+    addToAttackPct: SourceContribution[];
+    totalAddToAttackPct: number;
+    byType: RetaliationTypeBreakdown[];
+}
+
+export interface RateFactor {
+    label: string;
+    base: number;
+    contributions: SourceContribution[];
+    effective: number;
+    formula: string;
+}
+
+export interface Trigger {
+    chancePct: number;
+    cooldown: number;
+    grantedBy: string;
+}
+
+export interface AttackBreakdown {
+    name: string;
+    rank: number | null;
+    kind: "active" | "proc";
+    perHit: number;
+    dps: number;
+    rate: string;
+    sourcesByImpact: SourceImpact[];
+    types: TypeBreakdown[];
+    retaliation: RetaliationBreakdown | null;
+    rateFactors: RateFactor[];
+    trigger: Trigger | null;
+}
+
+// Fetches the breakdown for one attack/proc row, identified by kind + name +
+// (for skills) rank. Returns null when the backend has no matching row (404
+// — e.g. the row's overrides/difficulty query no longer produces that attack)
+// rather than throwing, so the page can render a clear "not found" state.
+export async function getAttackBreakdown(
+    name: string,
+    kind: "active" | "proc",
+    attack: string,
+    rank: number | null,
+    overrides: Overrides = {},
+    difficulty: Difficulty = "ultimate",
+): Promise<AttackBreakdown | null> {
+    const qs = new URLSearchParams();
+    qs.set("kind", kind);
+    qs.set("attack", attack);
+    if (rank !== null) qs.set("rank", String(rank));
+    applyParams(qs, overrides, difficulty);
+    const res = await fetch(
+        `/api/characters/${encodeURIComponent(name)}/attack-breakdown?${qs.toString()}`,
+    );
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`attack-breakdown: ${res.status} ${res.statusText}`);
+    return res.json() as Promise<AttackBreakdown>;
+}

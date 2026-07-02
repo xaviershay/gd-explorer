@@ -36,12 +36,12 @@ const num = (n: number) => Math.round(n).toLocaleString();
 // cap) keyed by character name.  Survives reloads so the user doesn't have to
 // reconstruct a what-if every time they revisit a character.
 const STORAGE_PREFIX = "gdx.charcfg.";
-interface PersistedConfig {
+export interface PersistedConfig {
     overrides: Overrides;
     difficulty: Difficulty;
     maxLevel: number | null;
 }
-function loadConfig(name: string): PersistedConfig | null {
+export function loadConfig(name: string): PersistedConfig | null {
     try {
         const raw = localStorage.getItem(STORAGE_PREFIX + name);
         if (!raw) return null;
