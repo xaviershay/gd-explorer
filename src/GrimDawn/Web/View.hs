@@ -964,8 +964,14 @@ skillDictionary db =
     , not (T.null desc) || not (emptyGroups bonuses)
     ]
   where
-    bonusesOf r =
-      let related = [("", r)]
+    -- Skill effects are stored per-rank as arrays (e.g. @offensiveFireMin =
+    -- [12,31,50,…]@); the scalar extractors only read single values, so collapse
+    -- each list to its rank-1 entry first. Records that already use scalars
+    -- (item-granted skills like relic procs) are unchanged.
+    rank1 (VList (x : _)) = x
+    rank1 v = v
+    bonusesOf r0 =
+      let related = [("", HM.map rank1 r0)]
        in BonusGroupsView
             { bgResistBonuses = resistBonuses related
             , bgDamageBonuses = damageBonuses related
