@@ -13,6 +13,12 @@ module GrimDawn.Report.Stats
   , SourceAmount (..)
   , TypeDetail (..)
   , RetaliationTypeDetail (..)
+  , RetaliationDetail (..)
+  , RateFactorDetail (..)
+  , TriggerDetail (..)
+  , SourceImpact (..)
+  , AttackBreakdown (..)
+  , attackDpsBreakdown
   , statSources
   , devotionSources
   , masterySources
@@ -49,7 +55,7 @@ module GrimDawn.Report.Stats
 
 import Data.Char (isDigit, isLower, toLower)
 import qualified Data.HashMap.Strict as HM
-import Data.List (find, intercalate, nub, nubBy, sortOn)
+import Data.List (find, intercalate, nub, nubBy, sortOn, (\\))
 import Data.Maybe (fromMaybe, listToMaybe)
 import Text.Read (readMaybe)
 import Data.Text (Text)
@@ -164,6 +170,77 @@ data RetaliationTypeDetail = RetaliationTypeDetail
   , rtdAddedToAttack :: !Double -- retaliationDamage x (shared add-to-attack %)/100
   }
   deriving (Show, Eq)
+
+-- | Retaliation damage added to an attack: the shared "% of retaliation
+-- damage added to attack" (one scalar, applied to every damage type), and
+-- each affected type's own flat/percent retaliation chain.
+data RetaliationDetail = RetaliationDetail
+  { rdAddToAttackSources :: ![SourceAmount]
+  , rdTotalAddToAttackPct :: !Double
+  , rdByType :: ![RetaliationTypeDetail]
+  }
+  deriving (Show, Eq)
+
+-- | A rate-affecting factor (attack speed, cooldown reduction, weapon
+-- damage %) and the sources contributing to it.
+data RateFactorDetail = RateFactorDetail
+  { rfdLabel :: !Text
+  , rfdBase :: !Double
+  , rfdSources :: ![SourceAmount]
+  , rfdEffective :: !Double
+  , rfdFormula :: !Text
+  }
+  deriving (Show, Eq)
+
+-- | A proc's trigger: chance, base cooldown, and the single record that
+-- grants it (only one record ever grants a given proc, unlike the
+-- contributor lists above).
+data TriggerDetail = TriggerDetail
+  { trgChancePct :: !Double
+  , trgCooldown :: !Double
+  , trgGrantedBy :: !Text
+  }
+  deriving (Show, Eq)
+
+-- | One source's estimated impact on a row's DPS: the row's current DPS
+-- minus its DPS with that source's records excluded, holding everything
+-- else fixed. Independent counterfactuals — not required to sum to the
+-- row's total DPS (see the design doc's "Why flat and % stay separate").
+data SourceImpact = SourceImpact
+  { siSource :: !Source
+  , siDpsImpact :: !Double
+  }
+  deriving (Show, Eq)
+
+-- | The full source-attributed breakdown for one attack/proc row.
+data AttackBreakdown = AttackBreakdown
+  { abName :: !Text
+  , abRank :: !(Maybe Int)
+  , abKind :: !AttackKind
+  , abPerHit :: !Double
+  , abDps :: !Double
+  , abRate :: !Text
+  , abSourcesByImpact :: ![SourceImpact]
+  , abTypes :: ![TypeDetail]
+  , abRetaliation :: !(Maybe RetaliationDetail)
+  , abRateFactors :: ![RateFactorDetail]
+  , abTrigger :: !(Maybe TriggerDetail)
+  }
+  deriving (Show, Eq)
+
+-- | One row's full detail: the existing summary ('AttackDps'), plus every
+-- piece 'attackDpsBreakdown' needs, plus the distinct sources that touched
+-- it (for the DPS-impact ranking). Computed once per row inside
+-- 'attackDpsRows' so 'attackDps' (which just projects 'rdSummary') and
+-- 'attackDpsBreakdown' can never disagree.
+data RowDetail = RowDetail
+  { rdSummary :: !AttackDps
+  , rdTypes :: ![TypeDetail]
+  , rdRetaliation :: !(Maybe RetaliationDetail)
+  , rdRateFactors :: ![RateFactorDetail]
+  , rdTrigger :: !(Maybe TriggerDetail)
+  , rdSourcesTouched :: ![Source]
+  }
 
 --------------------------------------------------------------------------------
 -- Difficulty
@@ -1043,13 +1120,21 @@ atRank i v = case v of
 -- persistent multi-hit ground effects are skipped or counted as a single hit.
 -- No crit or enemy resistances.
 attackDps :: GameDb -> [(Source, Record)] -> Character -> [AttackDps]
-attackDps db sources c =
-  sortOn (negate . adDps) actives ++ sortOn (negate . adDps) procs
+attackDps db sources0 c = map rdSummary (attackDpsRows Nothing db sources0 c)
+
+-- | Every attack/proc row's full detail (see 'RowDetail'). @exclude@, when
+-- set, removes every record tagged with that 'srcKey' from both the sources
+-- list and any skill sibling before computing — used by 'attackDpsBreakdown'
+-- to measure a single source's DPS impact by recomputing without it.
+attackDpsRows :: Maybe Text -> GameDb -> [(Source, Record)] -> Character -> [RowDetail]
+attackDpsRows exclude db sources0 c =
+  sortOn (negate . adDps . rdSummary) actives ++ sortOn (negate . adDps . rdSummary) procs
   where
+    sources = filter (\(s, _) -> Just (srcKey s) /= exclude) sources0
+    excluded sk = Just sk == exclude
     actives = [r | m <- weaponRow : map compute (charSkills c), Just r <- [m]]
     procs = [r | m <- map computeWps (charSkills c) ++ itemProcs ++ devoProcs ++ onHitProcs, Just r <- [m]]
     lv = collectSkillLevels (plainSources sources)
-    aps = assumedBaseAttackSpeed * (1 + sumField (plainSources sources) "characterAttackSpeedModifier" / 100)
     -- conversions from gear/buffs apply to every skill
     globalConv = concatMap (recordConversions . snd) sources
     -- The retaliation-added-to-attack chain, keyed by raw stem token (e.g.
@@ -1110,8 +1195,34 @@ attackDps db sources c =
        in case HM.lookup "skillCooldownReductionChance" r of
             Just _ -> red * maybe 0 (atRank i) (HM.lookup "skillCooldownReductionChance" r) / 100
             Nothing -> red
-    srcCdr = sum [cdrContrib 0 r | (_, r) <- sources]
     aggIn recs key = sum [maybe 0 (atRank i) (HM.lookup key r) | (i, r) <- recs]
+    -- Rate-affecting factors, each exposing its own source-attributed
+    -- contributor list alongside the scalar 'attackDps'/'mkRow' need, so
+    -- both the summary and the breakdown are derived from one computation.
+    attackSpeedCalc =
+      let contribs = [SourceAmount s v | (s, r) <- sources, let v = fromMaybe 0 (recNum r "characterAttackSpeedModifier"), v /= 0]
+          total = sum (map saValue contribs)
+          eff = assumedBaseAttackSpeed * (1 + total / 100)
+       in RateFactorDetail "Attack Speed" assumedBaseAttackSpeed contribs eff (oneDp assumedBaseAttackSpeed <> " x (1 + " <> showInt total <> "%) = " <> oneDp eff <> "/s")
+    cooldownReductionCalc baseCd sibs =
+      let gearContribs = [SourceAmount s v | (s, r) <- sources, let v = cdrContrib 0 r, v /= 0]
+          sibContribs = [SourceAmount s v | (s, i, r) <- sibs, let v = cdrContrib i r, v /= 0]
+          contribs = gearContribs ++ sibContribs
+          total = sum (map saValue contribs)
+          eff = max 0.1 (baseCd * (1 - total / 100))
+       in RateFactorDetail "Cooldown Reduction" baseCd contribs eff (oneDp baseCd <> "s x (1 - " <> showInt total <> "%) = " <> oneDp eff <> "s")
+    weaponDamagePctCalc sibs =
+      let contribs = [SourceAmount s v | (s, i, r) <- sibs, let v = maybe 0 (atRank i) (HM.lookup "weaponDamagePct" r), v /= 0]
+          total = sum (map saValue contribs)
+       in RateFactorDetail "Weapon Damage %" 0 contribs total (showInt total <> "% weapon damage")
+    -- the row-level retaliation-added-to-attack detail, from the same
+    -- 'retaliationByStem'/'retaliationAddToAttack' 'typedDamage' uses.
+    retaliationDetailFor srcs sibs
+      | HM.null byStem = Nothing
+      | otherwise = Just (RetaliationDetail addContribs (sum (map saValue addContribs)) (HM.elems byStem))
+      where
+        byStem = retaliationByStem srcs sibs
+        addContribs = retaliationAddToAttack srcs sibs
     -- the lowercased template name of a record
     tmpl r = maybe "" T.toLower (HM.lookup "templateName" r >>= valueText)
     -- a primary attack emits a row; its transmuters/modifiers/secondaries fold in.
@@ -1141,6 +1252,7 @@ attackDps db sources c =
     sibsOf s =
       [ (mkSource (skName sib) SrcSkill (skillDisplayName db (skName sib)), rankWith lv sib - 1, rr)
       | sib <- charSkills c
+      , not (excluded (skName sib))
       , skillBase (skName sib) == skillBase (skName s)
       , skLevel sib > 0
       , Just rr <- [lookupRecord (skName sib) db]
@@ -1157,12 +1269,26 @@ attackDps db sources c =
       let sibs = sibsOf s
           rank = rankWith lv s
           chance = maybe 0 (atRank (rank - 1)) (HM.lookup "skillChanceWeight" r) / 100
-          typed = typedDamage (aggIn (map (\(_, i, rr) -> (i, rr)) sibs) "weaponDamagePct") sibs
+          wdpCalc = weaponDamagePctCalc sibs
+          typed = typedDamage (rfdEffective wdpCalc) sibs
           perHit = sum (map tdTotal typed)
           rate = showInt (chance * 100) <> "% WPS on attack"
        in if perHit <= 0 || chance <= 0
             then Nothing
-            else Just (AttackDps (skillDisplayName db (skName s)) (Just rank) Triggered perHit (perHit * chance * aps) rate [(tdLabel t, tdTotal t) | t <- typed])
+            else
+              Just
+                RowDetail
+                  { rdSummary = AttackDps (skillDisplayName db (skName s)) (Just rank) Triggered perHit (perHit * chance * rfdEffective attackSpeedCalc) rate [(tdLabel t, tdTotal t) | t <- typed]
+                  , rdTypes = typed
+                  , rdRetaliation = retaliationDetailFor sources sibs
+                  , rdRateFactors = [attackSpeedCalc, wdpCalc]
+                  , rdTrigger = Nothing
+                  -- excludes the row's own primary skill record from the
+                  -- impact-ranking pool (see the note on mkRow's
+                  -- rdSourcesTouched below) — its invested modifiers/
+                  -- transmuters stay, since those are genuine build choices.
+                  , rdSourcesTouched = nub (map fst sources ++ [s' | (s', _, rr) <- sibs, not (isPrimary rr)])
+                  }
     -- the bare auto-attack: 100% weapon damage, no skill, spammed at attack speed
     weaponRow = mkRow "Weapon Attack" Nothing 100 0 []
     -- Every source's raw (pre-conversion) flat contribution across damage
@@ -1306,33 +1432,79 @@ attackDps db sources c =
     -- an actively-used attack (skill group or weapon attack): spam at attack speed
     -- (weapon%) or once per cooldown.
     mkRow name mRank wpnPct cdBase sibs =
-      let cdr = srcCdr + sum [cdrContrib i rr | (_, i, rr) <- sibs]
-          cd = max 0.1 (cdBase * (1 - cdr / 100)) -- floored so heavy CDR can't blow up the rate
+      let cdrCalc = cooldownReductionCalc cdBase sibs
+          cd = rfdEffective cdrCalc
           typed = typedDamage wpnPct sibs
           perHit = sum (map tdTotal typed)
-          (dps, rate)
-            | cdBase > 0 = (perHit / cd, oneDp cd <> "s cooldown")
-            | wpnPct > 0 = (perHit * aps, "~" <> oneDp aps <> "/s attacks (assumed base)")
-            | otherwise = (0, "")
+          retal = retaliationDetailFor sources sibs
+          (dps, rate, rateFactors)
+            | cdBase > 0 = (perHit / cd, oneDp cd <> "s cooldown", [cdrCalc])
+            | wpnPct > 0 =
+                ( perHit * rfdEffective attackSpeedCalc
+                , "~" <> oneDp (rfdEffective attackSpeedCalc) <> "/s attacks (assumed base)"
+                , [attackSpeedCalc, weaponDamagePctCalc sibs]
+                )
+            | otherwise = (0, "", [])
        in if perHit <= 0 || T.null rate
             then Nothing
-            else Just (AttackDps name mRank Active perHit dps rate [(tdLabel t, tdTotal t) | t <- typed])
+            else
+              Just
+                RowDetail
+                  { rdSummary = AttackDps name mRank Active perHit dps rate [(tdLabel t, tdTotal t) | t <- typed]
+                  , rdTypes = typed
+                  , rdRetaliation = retal
+                  , rdRateFactors = rateFactors
+                  , rdTrigger = Nothing
+                  -- excludes the row's own primary skill record: "what if I
+                  -- hadn't invested in this skill" is tautological while
+                  -- viewing this skill's own breakdown (it would always show
+                  -- the largest possible impact, the row's entire DPS,
+                  -- trivialising the ranking). Its invested modifiers/
+                  -- transmuters stay, since those are genuine build choices
+                  -- independent of having the base skill at all.
+                  , rdSourcesTouched = nub (map fst sources ++ [s | (s, _, rr) <- sibs, not (isPrimary rr)])
+                  }
     -- a proc: fires automatically on attack/hit at chance @p@, no more than once
     -- per cooldown. Expected interval = cooldown + the geometric wait for the next
     -- successful roll (@1 / (p x attacks-per-second)@). Damage is flat (no weapon
     -- scaling). @rank@ is the granted/invested level used to index value arrays.
-    mkProc name rank rec p cd trig =
-      let typed = typedDamage 0 [(mkSource "__proc__" SrcSkill name, rank - 1, rec)]
+    -- @grantedBy@ is the single source that grants this proc (an item, a
+    -- devotion star, or the learned skill itself), used both as the trigger's
+    -- display label and as the tag on the proc's own damage record, so its
+    -- flat contributor list shows exactly one line: the granting source.
+    mkProc name rank rec p cd trig grantedBy =
+      let typed = typedDamage 0 [(grantedBy, rank - 1, rec)]
           perHit = sum (map tdTotal typed)
-          interval = cd + 1 / max 0.01 (p * aps)
+          interval = cd + 1 / max 0.01 (p * rfdEffective attackSpeedCalc)
           rate = showInt (p * 100) <> "% on " <> trig <> ", " <> oneDp cd <> "s cd"
-       in if perHit <= 0 then Nothing else Just (AttackDps name Nothing Triggered perHit (perHit / interval) rate [(tdLabel t, tdTotal t) | t <- typed])
+       in if perHit <= 0
+            then Nothing
+            else
+              Just
+                RowDetail
+                  { rdSummary = AttackDps name Nothing Triggered perHit (perHit / interval) rate [(tdLabel t, tdTotal t) | t <- typed]
+                  , rdTypes = typed
+                  , rdRetaliation = Nothing
+                  , rdRateFactors = []
+                  , rdTrigger = Just (TriggerDetail (p * 100) cd (srcLabel grantedBy))
+                  -- same exclusion as mkRow: the granting source defines the
+                  -- proc's existence (removing it makes the whole proc
+                  -- vanish, not just shrink), so it's excluded from its own
+                  -- impact ranking — already surfaced via the trigger's
+                  -- "granted by" line. Other gear/devotion/buff sources that
+                  -- contribute generic %-modifiers to this proc's damage
+                  -- stay, since those are genuine independent "what if"
+                  -- questions (e.g. "what if I remove my +Fire% ring").
+                  , rdSourcesTouched = nub (map fst sources) \\ [grantedBy]
+                  }
     showInt x = T.pack (show (round x :: Integer))
     levelOf v = maybe 1 id (v >>= valueText >>= (readMaybe . T.unpack))
     -- procs granted by equipped items (itemSkillName + a cast_@... controller)
     itemProcs =
-      [ mkProc (skillDisplayName db skn) rank rec p cd trig
-      | (skn, ir) <- nubBy (\a b -> fst a == fst b) [(s, ir) | (_, ir) <- sources, Just s <- [lookupField "itemSkillName" ir >>= valueText]]
+      [ mkProc (skillDisplayName db skn) rank rec p cd trig grantedBy
+      | (skn, ir, grantedBy) <-
+          nubBy (\(a, _, _) (b, _, _) -> a == b)
+            [(s, ir, srcOfIr) | (srcOfIr, ir) <- sources, not (excluded (srcKey srcOfIr)), Just s <- [lookupField "itemSkillName" ir >>= valueText]]
       , Just rec <- [lookupRecord skn db]
       , Just (trig, p) <- [lookupField "itemSkillAutoController" ir >>= valueText >>= parseProcController]
       , let rank = levelOf (lookupField "itemSkillLevelEq" ir)
@@ -1340,8 +1512,9 @@ attackDps db sources c =
       ]
     -- procs bound to invested devotion stars (templateAutoCast controller)
     devoProcs =
-      [ mkProc (skillDisplayName db (skName s)) rank rec p cd trig
+      [ mkProc (skillDisplayName db (skName s)) rank rec p cd trig (mkSource (skName s) SrcDevotion (skillDisplayName db (skName s)))
       | s <- charSkills c
+      , not (excluded (skName s))
       , "skills/devotion" `T.isInfixOf` skName s
       , skLevel s > 0
       , Just rec <- [lookupRecord (skName s) db]
@@ -1351,8 +1524,9 @@ attackDps db sources c =
       ]
     -- learned skills that fire on hit (Skill_OnHit*), e.g. Vindictive Flame
     onHitProcs =
-      [ mkProc (skillDisplayName db (skName s)) rank rec p cd "hit"
+      [ mkProc (skillDisplayName db (skName s)) rank rec p cd "hit" (mkSource (skName s) SrcSkill (skillDisplayName db (skName s)))
       | s <- charSkills c
+      , not (excluded (skName s))
       , "records/skills/playerclass" `T.isPrefixOf` skName s
       , skLevel s > 0
       , Just rec <- [lookupRecord (skName s) db]
@@ -1361,6 +1535,38 @@ attackDps db sources c =
       , let p = maybe 1 (/ 100) (recNum rec "onHitActivationChance")
       , let cd = maybe 0 (atRank (rank - 1)) (HM.lookup "skillCooldownTime" rec)
       ]
+
+-- | The full source-attributed breakdown for one attack/proc row, identified
+-- by name + optional rank + kind (matching an 'AttackDps' row 'attackDps'
+-- already returns). Each source's DPS impact is measured by recomputing
+-- 'attackDpsRows' with that source excluded — an independent counterfactual
+-- against the same baseline, not a decomposition (see the design doc's "Why
+-- flat and % stay separate").
+attackDpsBreakdown :: GameDb -> [(Source, Record)] -> Character -> Text -> Maybe Int -> AttackKind -> Maybe AttackBreakdown
+attackDpsBreakdown db sources c name rank kind =
+  toBreakdown <$> find matches (attackDpsRows Nothing db sources c)
+  where
+    matches rd = adName (rdSummary rd) == name && adRank (rdSummary rd) == rank && adKind (rdSummary rd) == kind
+    toBreakdown rd =
+      AttackBreakdown
+        { abName = adName (rdSummary rd)
+        , abRank = adRank (rdSummary rd)
+        , abKind = adKind (rdSummary rd)
+        , abPerHit = adPerHit (rdSummary rd)
+        , abDps = adDps (rdSummary rd)
+        , abRate = adRate (rdSummary rd)
+        , abSourcesByImpact = sortOn (negate . abs . siDpsImpact) (filter ((/= 0) . siDpsImpact) (map (impactOf rd) (rdSourcesTouched rd)))
+        , abTypes = rdTypes rd
+        , abRetaliation = rdRetaliation rd
+        , abRateFactors = rdRateFactors rd
+        , abTrigger = rdTrigger rd
+        }
+    impactOf rd s =
+      let rowsWithout = attackDpsRows (Just (srcKey s)) db sources c
+          dpsWithout = case find matches rowsWithout of
+            Just rd' -> adDps (rdSummary rd')
+            Nothing -> 0
+       in SourceImpact s (adDps (rdSummary rd) - dpsWithout)
 
 -- a number to one decimal place (e.g. cooldown seconds, attacks/sec)
 oneDp :: Double -> Text

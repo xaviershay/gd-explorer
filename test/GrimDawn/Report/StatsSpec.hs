@@ -1,19 +1,29 @@
 module GrimDawn.Report.StatsSpec (spec) where
 
+import Data.List (find, sortOn)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import GrimDawn.Arz (Value (..))
 import GrimDawn.Db (GameDb (..))
 import GrimDawn.Gdc (Character (..), Item (..), Skill (..))
 import GrimDawn.Report.Stats
-  ( AttackDps (..)
+  ( AttackBreakdown (..)
+  , AttackDps (..)
   , AttackKind (..)
   , BuffToggle (..)
   , Difficulty (..)
+  , RateFactorDetail (..)
+  , RetaliationDetail (..)
+  , RetaliationTypeDetail (..)
   , Source (..)
+  , SourceAmount (..)
   , SourceCategory (..)
+  , SourceImpact (..)
+  , TriggerDetail (..)
+  , TypeDetail (..)
   , UpgradeRow (..)
   , attackDps
+  , attackDpsBreakdown
   , defaultWeights
   , devotionSources
   , findUpgrades
@@ -430,6 +440,112 @@ spec = describe "renderStats (synthetic)" $ do
         lookup "Burn (dot)" (adTypes r) `shouldBe` Nothing -- converted away
         lookup "Poison (dot)" (adTypes r) `shouldBe` Just 30 -- 10/s x 3s, now Poison
       rs -> expectationFailure ("expected one skill row, got " ++ show (length rs))
+
+  describe "attackDpsBreakdown" $ do
+    it "attributes flat and percent contributions per damage type" $ do
+      let ch = mkChar [mkSkillLvl "records/skills/playerclass01/atk1.dbr" 1]
+          sources =
+            [ (Source "wpn" "Test Weapon" SrcGear, HM.fromList [("offensivePhysicalMin", VFloat 100), ("offensivePhysicalMax", VFloat 100)])
+            , (Source "ring" "Test Ring" SrcGear, HM.fromList [("offensiveFireModifier", VFloat 20)])
+            ]
+      case attackDpsBreakdown synthDb sources ch "atk1.dbr" (Just 1) Active of
+        Nothing -> expectationFailure "expected a breakdown"
+        Just bd -> do
+          abPerHit bd `shouldBe` adPerHit (head (skillRows (attackDps synthDb sources ch)))
+          case find ((== "Physical") . tdLabel) (abTypes bd) of
+            Just t -> do
+              map saValue (tdFlatSources t) `shouldBe` [100]
+              tdFlatSubtotal t `shouldBe` 100
+            Nothing -> expectationFailure "expected a Physical TypeDetail"
+          case find ((== "Fire") . tdLabel) (abTypes bd) of
+            Just t -> do
+              map saValue (tdFlatSources t) `shouldBe` [50] -- atk1's own flat fire
+              map (srcLabel . saSource) (tdPercentSources t) `shouldBe` ["Test Ring"]
+              tdTotalPercent t `shouldBe` 20
+              tdTotal t `shouldBe` 60 -- 50 x 1.2
+            Nothing -> expectationFailure "expected a Fire TypeDetail"
+
+    it "attributes retaliation added to attack across its flat/pct/add-to-attack sources" $ do
+      let ch = mkChar [mkSkillLvl "records/skills/playerclass01/atk1.dbr" 1]
+          sources =
+            [ (Source "wpn" "Test Weapon" SrcGear, HM.fromList [("offensivePhysicalMin", VFloat 100), ("offensivePhysicalMax", VFloat 100)])
+            , (Source "shield" "Test Shield" SrcGear, HM.fromList [("retaliationFireMin", VFloat 200), ("retaliationFireMax", VFloat 200)])
+            , (Source "reprisal" "Reprisal" SrcSkill, HM.fromList [("retaliationDamagePct", VFloat 50)])
+            ]
+      case attackDpsBreakdown synthDb sources ch "atk1.dbr" (Just 1) Active of
+        Nothing -> expectationFailure "expected a breakdown"
+        Just bd -> case abRetaliation bd of
+          Nothing -> expectationFailure "expected a retaliation section"
+          Just rd -> do
+            map (srcLabel . saSource) (rdAddToAttackSources rd) `shouldBe` ["Reprisal"]
+            rdTotalAddToAttackPct rd `shouldBe` 50
+            case find ((== "Fire") . rtdLabel) (rdByType rd) of
+              Just t -> do
+                map (srcLabel . saSource) (rtdFlatSources t) `shouldBe` ["Test Shield"]
+                rtdFlatSubtotal t `shouldBe` 200
+                rtdRetaliationDamage t `shouldBe` 200
+                rtdAddedToAttack t `shouldBe` 100 -- 200 x 50%
+              Nothing -> expectationFailure "expected a Fire RetaliationTypeDetail"
+            -- the same 100 should also show up as a flat "Retaliation added to
+            -- attack" line in the Fire TypeDetail, matching the aggregate
+            -- attackDps number this test's sibling ("attackDps adds
+            -- retaliation damage to attack") already asserts on (50 skill
+            -- flat + 100 retaliation-added = 150).
+            case find ((== "Fire") . tdLabel) (abTypes bd) of
+              Just t -> map saValue (tdFlatSources t) `shouldContain` [100]
+              Nothing -> expectationFailure "expected a Fire TypeDetail"
+
+    it "reports cooldown-reduction rate factors for a cooldown-based attack" $ do
+      let ch =
+            mkChar
+              [ mkSkillLvl "records/skills/playerclass01/cdr1.dbr" 1
+              , mkSkillLvl "records/skills/playerclass01/cdr1b.dbr" 1
+              ]
+      case attackDpsBreakdown synthDb [] ch "cdr1.dbr" (Just 1) Active of
+        Nothing -> expectationFailure "expected a breakdown"
+        Just bd -> case find ((== "Cooldown Reduction") . rfdLabel) (abRateFactors bd) of
+          Just rf -> do
+            rfdBase rf `shouldBe` 4
+            rfdEffective rf `shouldBe` 3 -- 4 x (1 - 0.25)
+          Nothing -> expectationFailure "expected a Cooldown Reduction rate factor"
+
+    it "reports a proc's trigger info instead of contributor rate factors" $ do
+      let sources =
+            [ (Source "wpn" "Test Weapon" SrcGear, HM.fromList [("offensivePhysicalMin", VFloat 1), ("offensivePhysicalMax", VFloat 1)])
+            , (Source "relic" "Test Relic" SrcComponent, gdbRecords synthDb HM.! "records/items/relicProc.dbr")
+            ]
+      case attackDpsBreakdown synthDb sources (mkChar []) "Testproc" Nothing Triggered of
+        Nothing -> expectationFailure "expected a breakdown"
+        Just bd -> case abTrigger bd of
+          Just trg -> do
+            trgChancePct trg `shouldBe` 50
+            trgCooldown trg `shouldBe` 2
+            trgGrantedBy trg `shouldBe` "Test Relic"
+          Nothing -> expectationFailure "expected trigger info"
+
+    it "ranks sources by DPS impact, largest magnitude first" $ do
+      let ch = mkChar [mkSkillLvl "records/skills/playerclass01/atk1.dbr" 1]
+          sources =
+            [ (Source "wpn" "Test Weapon" SrcGear, HM.fromList [("offensivePhysicalMin", VFloat 100), ("offensivePhysicalMax", VFloat 100)])
+            , (Source "ring" "Test Ring" SrcGear, HM.fromList [("offensiveFireModifier", VFloat 20)])
+            ]
+      case attackDpsBreakdown synthDb sources ch "atk1.dbr" (Just 1) Active of
+        Nothing -> expectationFailure "expected a breakdown"
+        Just bd -> do
+          let impacts = [(srcLabel (siSource i), siDpsImpact i) | i <- abSourcesByImpact bd]
+          -- the row's own primary skill ("atk1.dbr") is excluded from the
+          -- ranking: "what if I hadn't invested in this skill" is
+          -- tautological while viewing this skill's own breakdown (it would
+          -- always show the largest possible impact -- the row's entire
+          -- DPS -- trivialising the ranking).
+          lookup "atk1.dbr" impacts `shouldBe` Nothing
+          case impacts of
+            ((topLabel, topImpact) : _) -> do
+              topLabel `shouldBe` "Test Weapon"
+              (topImpact > 0) `shouldBe` True
+            [] -> expectationFailure "expected at least one impact row"
+          -- descending order: the impact list is sorted by |impact|
+          map (abs . snd) impacts `shouldSatisfy` \xs -> xs == sortOn negate xs
 
   it "parseProcController reads attack-driven trigger + chance, skipping others" $ do
     parseProcController "records/controllers/itemskills/cast_@enemyonattack_20%.dbr" `shouldBe` Just ("attack", 0.2)
