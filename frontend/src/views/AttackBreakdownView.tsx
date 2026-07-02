@@ -1,10 +1,12 @@
 import {
     getAttackBreakdown,
+    RateFactor,
     RetaliationBreakdown,
     RetaliationTypeBreakdown,
     SourceCategory,
     SourceContribution,
     SourceImpact,
+    Trigger,
     TypeBreakdown,
 } from "../api";
 import { useAsync } from "../hooks";
@@ -122,6 +124,16 @@ export function AttackBreakdownView({
             ))}
 
             {bd.retaliation && <RetaliationSection r={bd.retaliation} />}
+
+            {bd.rateFactors.length > 0 && (
+                <>
+                    <h2 className="section-head">Rate</h2>
+                    {bd.rateFactors.map((rf, i) => (
+                        <RateFactorBlock key={i} rf={rf} />
+                    ))}
+                </>
+            )}
+            {bd.trigger && <TriggerBlock trigger={bd.trigger} />}
         </div>
     );
 }
@@ -314,5 +326,32 @@ function RetaliationTypeBlock({ t }: { t: RetaliationTypeBreakdown }) {
                 {num(t.addedToAttack)} added to this attack
             </p>
         </div>
+    );
+}
+
+function RateFactorBlock({ rf }: { rf: RateFactor }) {
+    return (
+        <div className="retaliation-type-block">
+            <h3 className="breakdown-subhead">{rf.label}</h3>
+            <ContribTable
+                rows={rf.contributions}
+                valueLabel="%"
+                total={rf.contributions.reduce((s, c) => s + c.value, 0)}
+            />
+            <p className="muted breakdown-formula">{rf.formula}</p>
+        </div>
+    );
+}
+
+function TriggerBlock({ trigger }: { trigger: Trigger }) {
+    return (
+        <>
+            <h2 className="section-head">Trigger</h2>
+            <p className="muted">
+                {num(trigger.chancePct)}% chance on attack,{" "}
+                {num(trigger.cooldown)}s cooldown — granted by{" "}
+                {trigger.grantedBy}.
+            </p>
+        </>
     );
 }
