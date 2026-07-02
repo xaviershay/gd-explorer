@@ -778,6 +778,13 @@ a.attack-card:hover {
     font-size: 12px;
     margin-top: -2px;
 }
+.retaliation-type-block + .retaliation-type-block {
+    margin-top: 14px;
+}
+.breakdown-subhead {
+    font-size: 14px;
+    margin: 10px 0 4px;
+}
 
 /* Equipment paper-doll: a 7-row × 2-column grid (head|amulet, ring|ring, …). */
 .equip-grid2 {

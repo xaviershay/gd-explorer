@@ -1,5 +1,7 @@
 import {
     getAttackBreakdown,
+    RetaliationBreakdown,
+    RetaliationTypeBreakdown,
     SourceCategory,
     SourceContribution,
     SourceImpact,
@@ -118,6 +120,8 @@ export function AttackBreakdownView({
             {bd.types.map((t, i) => (
                 <TypeSection key={i} t={t} />
             ))}
+
+            {bd.retaliation && <RetaliationSection r={bd.retaliation} />}
         </div>
     );
 }
@@ -258,5 +262,57 @@ function TypeSection({ t }: { t: TypeBreakdown }) {
                 </p>
             )}
         </>
+    );
+}
+
+function RetaliationSection({ r }: { r: RetaliationBreakdown }) {
+    return (
+        <>
+            <h2 className="section-head">Retaliation added to attack</h2>
+            <div className="breakdown-col-head">
+                % of retaliation damage added to attack
+            </div>
+            <ContribTable
+                rows={r.addToAttackPct}
+                valueLabel="%"
+                total={r.totalAddToAttackPct}
+            />
+            {r.byType.map((t, i) => (
+                <RetaliationTypeBlock key={i} t={t} />
+            ))}
+        </>
+    );
+}
+
+function RetaliationTypeBlock({ t }: { t: RetaliationTypeBreakdown }) {
+    return (
+        <div className="retaliation-type-block">
+            <h3 className="breakdown-subhead">{t.label}</h3>
+            <div className="breakdown-columns">
+                <div>
+                    <div className="breakdown-col-head">Flat retaliation</div>
+                    <ContribTable
+                        rows={t.flat}
+                        valueLabel="Flat"
+                        total={t.flatSubtotal}
+                    />
+                </div>
+                {t.percent.length > 0 && (
+                    <div>
+                        <div className="breakdown-col-head">% modifiers</div>
+                        <ContribTable
+                            rows={t.percent}
+                            valueLabel="%"
+                            total={t.totalPercent}
+                        />
+                    </div>
+                )}
+            </div>
+            <p className="muted breakdown-formula">
+                {num(t.flatSubtotal)} x (1 + {num(t.totalPercent)}%) ={" "}
+                {num(t.retaliationDamage)} retaliation damage &rarr;{" "}
+                {num(t.addedToAttack)} added to this attack
+            </p>
+        </div>
     );
 }
