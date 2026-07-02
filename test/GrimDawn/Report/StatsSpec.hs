@@ -10,6 +10,8 @@ import GrimDawn.Report.Stats
   , AttackKind (..)
   , BuffToggle (..)
   , Difficulty (..)
+  , Source (..)
+  , SourceCategory (..)
   , UpgradeRow (..)
   , attackDps
   , defaultWeights
@@ -20,6 +22,7 @@ import GrimDawn.Report.Stats
   , overlayAt
   , parseBuffs
   , parseProcController
+  , plainSources
   , renderStats
   , skillSources
   )
@@ -36,6 +39,11 @@ mkSkillLvl n lvl = Skill n (fromIntegral lvl) True 0 0 0 False False "" ""
 
 mkChar :: [Skill] -> Character
 mkChar sks = Character "Test" "" 100 False [] [] [] sks 0 0 0 0 0 []
+
+-- a throwaway Source for fixtures that don't care about label/category, keyed
+-- by the same string the old tests used as the sources-list label.
+testSource :: T.Text -> Source
+testSource n = Source n n SrcOther
 
 -- the skill rows (excluding the synthetic bare "Weapon Attack" baseline)
 skillRows :: [AttackDps] -> [AttackDps]
@@ -244,7 +252,7 @@ spec = describe "renderStats (synthetic)" $ do
   it "includes devotion passive bonuses as extra sources" $ do
     let ch = mkChar [mkSkill "records/skills/devotion/tier1_15a.dbr"]
         extra = devotionSources synthDb ch
-        out = renderStats False Normal ch extra synthDb []
+        out = renderStats False Normal ch (plainSources extra) synthDb []
     length extra `shouldBe` 1
     ("Defensive Ability" `T.isInfixOf` out) `shouldBe` True
     ("+18" `T.isInfixOf` out) `shouldBe` True
@@ -264,12 +272,12 @@ spec = describe "renderStats (synthetic)" $ do
     -- nothing folded in when no categories enabled
     skillSources noBuffs [] synthDb ch `shouldBe` []
     -- permanent only: the passive, resolved at rank 2 (=20 OA); modifier excluded
-    map fst (skillSources permOnly [] synthDb ch)
+    map (srcKey . fst) (skillSources permOnly [] synthDb ch)
       `shouldBe` ["records/skills/playerclass01/passive1.dbr"]
-    ("+20" `T.isInfixOf` renderStats False Normal ch (skillSources permOnly [] synthDb ch) synthDb [])
+    ("+20" `T.isInfixOf` renderStats False Normal ch (plainSources (skillSources permOnly [] synthDb ch)) synthDb [])
       `shouldBe` True
     -- all categories: passive + duration buff, still no modifier
-    map fst (skillSources (BuffToggle True True True) [] synthDb ch)
+    map (srcKey . fst) (skillSources (BuffToggle True True True) [] synthDb ch)
       `shouldBe` ["records/skills/playerclass01/passive1.dbr", "records/skills/playerclass01/buff1.dbr"]
 
   it "folds a skill modifier in under its parent skill's category" $ do
@@ -279,8 +287,8 @@ spec = describe "renderStats (synthetic)" $ do
             , mkSkillLvl "records/skills/playerclass01/passive2.dbr" 1
             ]
         perm = BuffToggle True False False
-        names = map fst (skillSources perm [] synthDb ch)
-        out = renderStats False Normal ch (skillSources perm [] synthDb ch) synthDb []
+        names = map (srcKey . fst) (skillSources perm [] synthDb ch)
+        out = renderStats False Normal ch (plainSources (skillSources perm [] synthDb ch)) synthDb []
     -- passive2 inherits passive1's Permanent category and contributes fire resist
     ("records/skills/playerclass01/passive2.dbr" `elem` names) `shouldBe` True
     -- the stats resist line shows Fire at 25%
@@ -292,10 +300,10 @@ spec = describe "renderStats (synthetic)" $ do
 
   it "scales skill buffs by +skills from the context" $ do
     let ch = mkChar [mkSkillLvl "records/skills/playerclass01/passive1.dbr" 1]
-        ctx = [("gear", HM.fromList [("augmentAllLevel", VFloat 1)])]
+        ctx = [(testSource "gear", HM.fromList [("augmentAllLevel", VFloat 1)])]
         perm = BuffToggle True False False
-        withPlus = renderStats False Normal ch (skillSources perm ctx synthDb ch) synthDb []
-        without = renderStats False Normal ch (skillSources perm [] synthDb ch) synthDb []
+        withPlus = renderStats False Normal ch (plainSources (skillSources perm ctx synthDb ch)) synthDb []
+        without = renderStats False Normal ch (plainSources (skillSources perm [] synthDb ch)) synthDb []
     -- invested rank 1 -> +10 OA; with +1 all skills -> rank 2 -> +20 OA
     ("+10" `T.isInfixOf` without) `shouldBe` True
     ("+20" `T.isInfixOf` withPlus) `shouldBe` True
@@ -315,7 +323,7 @@ spec = describe "renderStats (synthetic)" $ do
   it "attackDps estimates per-hit and DPS from a weapon attack" $ do
     -- 100% weapon damage off a 100-avg physical weapon + 50 flat fire, 2s cooldown
     let ch = mkChar [mkSkillLvl "records/skills/playerclass01/atk1.dbr" 1]
-        sources = [("wpn", HM.fromList [("offensivePhysicalMin", VFloat 100), ("offensivePhysicalMax", VFloat 100)])]
+        sources = [(testSource "wpn", HM.fromList [("offensivePhysicalMin", VFloat 100), ("offensivePhysicalMax", VFloat 100)])]
     case skillRows (attackDps synthDb sources ch) of
       (r : _) -> do
         adPerHit r `shouldBe` 150 -- 100 weapon + 50 fire
@@ -329,8 +337,8 @@ spec = describe "renderStats (synthetic)" $ do
     let ch = mkChar [mkSkillLvl "records/skills/playerclass01/atk1.dbr" 1]
         -- weapon plus a global 100% Fire -> Poison (acid) conversion source
         sources =
-          [ ("wpn", HM.fromList [("offensivePhysicalMin", VFloat 100), ("offensivePhysicalMax", VFloat 100)])
-          , ( "conv"
+          [ (testSource "wpn", HM.fromList [("offensivePhysicalMin", VFloat 100), ("offensivePhysicalMax", VFloat 100)])
+          , ( testSource "conv"
             , HM.fromList
                 [ ("conversionInType", VString "Fire")
                 , ("conversionOutType", VString "Poison")
@@ -349,8 +357,8 @@ spec = describe "renderStats (synthetic)" $ do
     let ch = mkChar [mkSkillLvl "records/skills/playerclass01/atk1.dbr" 1]
         -- 200 flat fire retaliation + 50% retaliation-added-to-attack (global)
         sources =
-          [ ("wpn", HM.fromList [("offensivePhysicalMin", VFloat 100), ("offensivePhysicalMax", VFloat 100)])
-          , ( "retal"
+          [ (testSource "wpn", HM.fromList [("offensivePhysicalMin", VFloat 100), ("offensivePhysicalMax", VFloat 100)])
+          , ( testSource "retal"
             , HM.fromList
                 [ ("retaliationFireMin", VFloat 200)
                 , ("retaliationFireMax", VFloat 200)
@@ -370,7 +378,7 @@ spec = describe "renderStats (synthetic)" $ do
             [ mkSkillLvl "records/skills/playerclass01/atk1.dbr" 1
             , mkSkillLvl "records/skills/playerclass01/atk1b.dbr" 1
             ]
-        sources = [("wpn", HM.fromList [("offensivePhysicalMin", VFloat 100), ("offensivePhysicalMax", VFloat 100)])]
+        sources = [(testSource "wpn", HM.fromList [("offensivePhysicalMin", VFloat 100), ("offensivePhysicalMax", VFloat 100)])]
     case skillRows (attackDps synthDb sources ch) of
       [r] -> do
         -- only the primary attack emits; the modifier's cold and -0.5s fold in
@@ -399,7 +407,7 @@ spec = describe "renderStats (synthetic)" $ do
       rs -> expectationFailure ("expected one row, got " ++ show (length rs))
 
   it "includes a bare Weapon Attack row (100% weapon damage)" $ do
-    let sources = [("wpn", HM.fromList [("offensivePhysicalMin", VFloat 100), ("offensivePhysicalMax", VFloat 100)])]
+    let sources = [(testSource "wpn", HM.fromList [("offensivePhysicalMin", VFloat 100), ("offensivePhysicalMax", VFloat 100)])]
     case filter ((== "Weapon Attack") . adName) (attackDps synthDb sources (mkChar [])) of
       [r] -> do
         adRank r `shouldBe` Nothing
@@ -409,7 +417,7 @@ spec = describe "renderStats (synthetic)" $ do
   it "applies conversions to damage-over-time (Burn -> Poison)" $ do
     let ch = mkChar [mkSkillLvl "records/skills/playerclass01/burn1.dbr" 1]
         sources =
-          [ ( "conv"
+          [ ( testSource "conv"
             , HM.fromList
                 [ ("conversionInType", VString "Fire")
                 , ("conversionOutType", VString "Poison")
@@ -433,8 +441,8 @@ spec = describe "renderStats (synthetic)" $ do
   it "attackDps adds an item-granted proc with expected-value DPS" $ do
     -- 100 fire, 2s cd, 50% on attack; aps = 1 (no attack-speed source)
     let sources =
-          [ ("wpn", HM.fromList [("offensivePhysicalMin", VFloat 1), ("offensivePhysicalMax", VFloat 1)])
-          , ("relic", gdbRecords synthDb HM.! "records/items/relicProc.dbr")
+          [ (testSource "wpn", HM.fromList [("offensivePhysicalMin", VFloat 1), ("offensivePhysicalMax", VFloat 1)])
+          , (testSource "relic", gdbRecords synthDb HM.! "records/items/relicProc.dbr")
           ]
     case filter ((== Triggered) . adKind) (attackDps synthDb sources (mkChar [])) of
       [r] -> do

@@ -53,6 +53,7 @@ import GrimDawn.Report.Stats
   , overlay
   , parseBuffs
   , parseDifficulty
+  , plainSources
   , renderDps
   , renderStats
   , renderStatsDiff
@@ -291,9 +292,9 @@ run = \case
               TIO.putStrLn ""
               TIO.putStrLn ("Overlaying: " <> T.intercalate ", " (map (iaDisplayName . (`itemAttrs` db)) found))
               TIO.putStrLn ""
-              TIO.putStr (renderStatsDiff useColor (coDifficulty copts) extra db base effective)
+              TIO.putStr (renderStatsDiff useColor (coDifficulty copts) (plainSources extra) db base effective)
             TIO.putStrLn ""
-            TIO.putStr (renderStats useColor (coDifficulty copts) c extra db effective)
+            TIO.putStr (renderStats useColor (coDifficulty copts) c (plainSources extra) db effective)
   CmdUpgrades dir name uo -> do
     db <- loadGameDb dir >>= orDie
     chars <- loadCharacters dir >>= orDie

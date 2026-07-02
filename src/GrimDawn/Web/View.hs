@@ -93,6 +93,7 @@ import GrimDawn.Report.Stats
   , inheritGear
   , masterySources
   , mkScoreBase
+  , plainSources
   , scoreItems
   , skillSources
   , statSources
@@ -462,7 +463,7 @@ detailView db owned overrides difficulty c =
     , cdvLevel = fromIntegral (charLevel c)
     , cdvClassName = className db c
     , cdvHardcore = charHardcore c
-    , cdvSummary = toSummaryView difficulty (statSummary difficulty c sources)
+    , cdvSummary = toSummaryView difficulty (statSummary difficulty c (plainSources sources))
     , cdvAttacks = map toAttackView (attackDps db sources c)
     , cdvGear = map gearViewOf items
     , cdvArmorTable = armorTable items
@@ -489,9 +490,9 @@ detailView db owned overrides difficulty c =
       [ ("head", "Head"), ("shoulders", "Shoulders"), ("chest", "Chest")
       , ("hands", "Arms"), ("legs", "Legs"), ("feet", "Feet")
       ]
-    pieceArmor it = sumField (statSources db [it]) "defensiveProtection"
+    pieceArmor it = sumField (plainSources (statSources db [it])) "defensiveProtection"
     -- Global % armor modifier (from all gear + devotions + skills).
-    globalArmorPct = sumField sources "defensiveProtectionModifier"
+    globalArmorPct = sumField (plainSources sources) "defensiveProtectionModifier"
     -- Per-slot armor in GD = (this piece's flat armor + the flat armor every
     -- other source contributes to that body part) * (1 + % armor). The "other"
     -- flat armor is everything except the six displayed body pieces: belt,
@@ -500,7 +501,7 @@ detailView db owned overrides difficulty c =
     armorTable its =
       let displayed = map fst armorSlotLabels
           globalFlat =
-            sumField sources "defensiveProtection"
+            sumField (plainSources sources) "defensiveProtection"
               - sum [pieceArmor it | it <- its, iaType (itemAttrs it db) `elem` map Just displayed]
        in [ NamedValueView label ((pieceArmor it + globalFlat) * (1 + globalArmorPct / 100))
           | (slotKey, label) <- armorSlotLabels

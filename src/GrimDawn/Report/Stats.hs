@@ -6,6 +6,13 @@ module GrimDawn.Report.Stats
   ( Difficulty (..)
   , parseDifficulty
   , difficultyPenalty
+  , SourceCategory (..)
+  , Source (..)
+  , mkSource
+  , plainSources
+  , SourceAmount (..)
+  , TypeDetail (..)
+  , RetaliationTypeDetail (..)
   , statSources
   , devotionSources
   , masterySources
@@ -43,13 +50,13 @@ module GrimDawn.Report.Stats
 import Data.Char (isDigit, isLower, toLower)
 import qualified Data.HashMap.Strict as HM
 import Data.List (find, intercalate, nub, nubBy, sortOn)
-import Data.Maybe (listToMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Text.Read (readMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import GrimDawn.Arz (Record, Value (..), lookupField, valueText)
 import GrimDawn.Db (GameDb, lookupRecord)
-import GrimDawn.Gdc (Character (..), Item (..), Skill (..), emptyItemName)
+import GrimDawn.Gdc (Character (..), Item (..), Skill (..), emptyItemName, itemWithName)
 import GrimDawn.Item
   ( damageElems
   , damageBonuses
@@ -68,6 +75,95 @@ import GrimDawn.Item
   , sumRange
   )
 import GrimDawn.Report.Color (colorByType)
+
+--------------------------------------------------------------------------------
+-- Source attribution
+--------------------------------------------------------------------------------
+
+-- | The kind of thing that granted a stat-contributing record, for the DPS
+-- attribution breakdown ('GrimDawn.Report.Stats.attackDpsBreakdown').
+data SourceCategory
+  = SrcGear | SrcComponent | SrcAugment | SrcSetBonus
+  | SrcDevotion | SrcMastery | SrcSkill | SrcOther
+  deriving (Show, Eq)
+
+-- | A stat-contributing record's owner: a display label and category for
+-- attribution, plus the original record-path key so existing dedup/equality
+-- logic over @[(Text, Record)]@ keeps working unchanged — 'Eq'/'Ord' defer to
+-- the key alone, ignoring label/category.
+data Source = Source
+  { srcKey :: !Text
+  , srcLabel :: !Text
+  , srcCategory :: !SourceCategory
+  }
+  deriving (Show)
+
+instance Eq Source where
+  a == b = srcKey a == srcKey b
+
+instance Ord Source where
+  compare a b = compare (srcKey a) (srcKey b)
+
+mkSource :: Text -> SourceCategory -> Text -> Source
+mkSource key cat label = Source key label cat
+
+-- | Strip a 'Source'-tagged sources list back down to the plain
+-- @[(Text, Record)]@ shape 'GrimDawn.Item''s aggregation helpers
+-- ('GrimDawn.Item.sumField', 'GrimDawn.Item.sumRange', ...) and the plain
+-- stat-summary functions below expect.
+plainSources :: [(Source, Record)] -> [(Text, Record)]
+plainSources = map (\(s, r) -> (srcKey s, r))
+
+-- | One source's contribution to a flat amount or a percentage figure.
+data SourceAmount = SourceAmount
+  { saSource :: !Source
+  , saValue :: !Double
+  }
+  deriving (Show, Eq)
+
+-- | One damage type's full per-hit breakdown for a single attack/proc row:
+-- the flat contributors (summing to 'tdFlatSubtotal'), and either the
+-- immediate-damage percent contributors ('tdPercentSources') or — for a
+-- damage-over-time row (label ends " (dot)") — the duration and damage
+-- percent contributors kept separate, since a DoT's total is
+-- @flatSubtotal x (1 + durationPct/100) x (1 + damagePct/100)@: two
+-- multiplicative pools, not one. Immediate rows leave the duration/damage-pct
+-- fields empty; DoT rows leave 'tdPercentSources'/'tdTotalPercent' empty.
+data TypeDetail = TypeDetail
+  { tdLabel :: !Text
+  , tdTotal :: !Double
+  , tdFlatSources :: ![SourceAmount]
+  , tdFlatSubtotal :: !Double
+  , tdPercentSources :: ![SourceAmount]
+  , tdTotalPercent :: !Double
+  , tdDurationSources :: ![SourceAmount]
+  , tdTotalDurationPercent :: !Double
+  , tdDamagePctSources :: ![SourceAmount]
+  , tdTotalDamagePercent :: !Double
+  }
+  deriving (Show, Eq)
+
+-- | The synthetic "source" for the retaliation-added-to-attack flat line in a
+-- 'TypeDetail' — it's a computed aggregate of several real sources (see
+-- 'retaliationByStem'), not one source, so it isn't further splittable within
+-- the flat table.
+retaliationPseudoSource :: Source
+retaliationPseudoSource = Source "__retaliation__" "Retaliation added to attack" SrcOther
+
+-- | Retaliation's own flat -> % -> % chain for one damage type: its own flat
+-- retaliation stat (x its own % modifiers), and the resulting contribution to
+-- an attack once the shared "% of retaliation damage added to attack" is
+-- applied. See 'retaliationByStem'.
+data RetaliationTypeDetail = RetaliationTypeDetail
+  { rtdLabel :: !Text
+  , rtdFlatSources :: ![SourceAmount]
+  , rtdFlatSubtotal :: !Double
+  , rtdPercentSources :: ![SourceAmount]
+  , rtdTotalPercent :: !Double
+  , rtdRetaliationDamage :: !Double -- flatSubtotal x (1 + totalPercent/100)
+  , rtdAddedToAttack :: !Double -- retaliationDamage x (shared add-to-attack %)/100
+  }
+  deriving (Show, Eq)
 
 --------------------------------------------------------------------------------
 -- Difficulty
@@ -107,21 +203,49 @@ parseDifficulty s = case map toLower s of
 -- Stat sources
 --------------------------------------------------------------------------------
 
--- | Every stat-bearing record contributed by a character's equipped gear: each
--- item's related records (base + affixes + relic + augment) plus each active set
--- bonus tier. (Devotion and skill buffs are layered on by callers later.)
-statSources :: GameDb -> [Item] -> [(Text, Record)]
+-- | Every stat-bearing record contributed by a character's equipped gear,
+-- tagged with its owning 'Source' for the DPS attribution breakdown: each
+-- item's base+affix records under one "Gear" source (the item's display
+-- name), its relic (+relic-bonus) under a separate "Component" source, its
+-- augment under a separate "Augment" source, plus each active set-completion
+-- tier under a "Set Bonus" source. (Devotion and skill buffs are layered on
+-- by callers later.)
+statSources :: GameDb -> [Item] -> [(Source, Record)]
 statSources db items =
-  concatMap (`relatedRecords` db) equipped ++ setTiers
+  concatMap itemSources equipped ++ setTiers
   where
     equipped = filter (not . emptyItemName) items
+    itemSources it =
+      [ (mkSource n SrcGear (labelOf it), r)
+      | n <-
+          filter
+            (T.isPrefixOf "records/")
+            [itemBaseName it, itemPrefixName it, itemSuffixName it, itemModifierName it, itemTransmuteName it]
+      , Just r <- [lookupRecord n db]
+      ]
+        ++ [ (mkSource n SrcComponent (labelOf (itemWithName (itemRelicName it))), r)
+           | n <- [itemRelicName it, itemRelicBonus it]
+           , not (T.null n)
+           , Just r <- [lookupRecord n db]
+           ]
+        ++ [ (mkSource n SrcAugment (labelOf (itemWithName (itemAugmentName it))), r)
+           | n <- [itemAugmentName it]
+           , not (T.null n)
+           , Just r <- [lookupRecord n db]
+           ]
+    labelOf it = iaDisplayName (itemAttrs it db)
     setRecs = [s | it <- equipped, Just s <- [setRecordName it db]]
     setTiers =
-      [ (rec, resolveSetTier cnt r)
+      [ (mkSource rec SrcSetBonus (setLabel rec r cnt), resolveSetTier cnt r)
       | rec <- nub setRecs
       , Just r <- [lookupRecord rec db]
       , let cnt = length (filter (== rec) setRecs)
       ]
+    setLabel rec r cnt =
+      fromMaybe (T.takeWhileEnd (/= '/') rec) (lookupField "setName" r >>= valueText)
+        <> " ("
+        <> T.pack (show cnt)
+        <> "pc)"
 
 -- | Passive stat records granted by a character's chosen devotions: each taken
 -- constellation star (excluding the @*_skill@ celestial-power procs, which are
@@ -130,9 +254,9 @@ statSources db items =
 -- The save lists *every* star of any touched constellation, including ones the
 -- character has not allocated a point to (@skLevel == 0@); those must be skipped
 -- or their passives (resistances, etc.) inflate the totals.
-devotionSources :: GameDb -> Character -> [(Text, Record)]
+devotionSources :: GameDb -> Character -> [(Source, Record)]
 devotionSources db c =
-  [ (skName s, r)
+  [ (mkSource (skName s) SrcDevotion (skillDisplayName db (skName s)), r)
   | s <- charSkills c
   , skLevel s > 0
   , "/devotion/tier" `T.isInfixOf` skName s
@@ -142,9 +266,9 @@ devotionSources db c =
 
 -- | Always-on stat records from a character's mastery bars, resolved at the
 -- invested mastery rank (they grant attributes, health, and energy by rank).
-masterySources :: GameDb -> Character -> [(Text, Record)]
+masterySources :: GameDb -> Character -> [(Source, Record)]
 masterySources db c =
-  [ (skName s, resolveSetTier (fromIntegral (skLevel s)) r)
+  [ (mkSource (skName s) SrcMastery (skillDisplayName db (skName s)), resolveSetTier (fromIntegral (skLevel s)) r)
   | s <- charSkills c
   , "_classtraining_" `T.isInfixOf` skName s
   , skLevel s > 0
@@ -263,9 +387,9 @@ masteryRecordOf p =
 -- @ctx@ (gear + devotions). Skill modifier nodes (e.g. the resistances a node
 -- adds to an aura) are folded in too, inheriting their parent skill's category;
 -- attack skills are not folded in (their bonuses are conditional on the ability).
-skillSources :: BuffToggle -> [(Text, Record)] -> GameDb -> Character -> [(Text, Record)]
+skillSources :: BuffToggle -> [(Source, Record)] -> GameDb -> Character -> [(Source, Record)]
 skillSources tog ctx db c =
-  [ (skName s, resolveSetTier (effRank s) (buffStatRecord db skRec))
+  [ (mkSource (skName s) SrcSkill (skillDisplayName db (skName s)), resolveSetTier (effRank s) (buffStatRecord db skRec))
   | s <- charSkills c
   , skLevel s > 0
   , "records/skills/playerclass" `T.isPrefixOf` skName s
@@ -275,7 +399,7 @@ skillSources tog ctx db c =
   , allowed tog cat
   ]
   where
-    effRank = rankWith (collectSkillLevels ctx)
+    effRank = rankWith (collectSkillLevels (plainSources ctx))
 
     -- base skill name -> intrinsic category, from this character's invested
     -- skills that have one (used so modifier nodes can inherit it).
@@ -522,7 +646,7 @@ renderStats useColor diff c extra db items =
       ++ blank dmgLines
       ++ dmgLines
   where
-    sources = statSources db items ++ extra
+    sources = plainSources (statSources db items) ++ extra
     equipped = filter (not . emptyItemName) items
     blank xs = if null xs then [] else [""]
     penaltyNote = case diff of
@@ -599,8 +723,8 @@ renderStatsDiff _useColor diff extra db base over =
       ++ ["", "Defenses & Offense:"]
       ++ (if null defenseDiff then ["  (no change)"] else defenseDiff)
   where
-    srcB = statSources db base ++ extra
-    srcO = statSources db over ++ extra
+    srcB = plainSources (statSources db base) ++ extra
+    srcO = plainSources (statSources db over) ++ extra
     rB = resistRows diff srcB
     rO = resistRows diff srcO
     resistDiff =
@@ -757,7 +881,7 @@ data ScoreBase = ScoreBase
   , sbDiff :: !Difficulty
   , sbDb :: !GameDb
   , sbChar :: !Character
-  , sbExtra :: ![(Text, Record)] -- non-gear sources (devotions, mastery, buffs)
+  , sbExtra :: ![(Source, Record)] -- non-gear sources (devotions, mastery, buffs)
   , sbBaseResists :: ![(Text, Double, Double, Double)]
   , sbBaseKeyTotals :: ![(Text, Double, Double)]
   , sbBaseDps :: !Double
@@ -766,7 +890,7 @@ data ScoreBase = ScoreBase
 -- | Precompute the baseline stats for an equipped gear list so candidate
 -- overlays can be scored without redoing the base work each time.
 mkScoreBase
-  :: Weights -> Double -> Difficulty -> Character -> [(Text, Record)] -> GameDb -> [Item] -> ScoreBase
+  :: Weights -> Double -> Difficulty -> Character -> [(Source, Record)] -> GameDb -> [Item] -> ScoreBase
 mkScoreBase w target diff c extra db base =
   let srcBase = statSources db base ++ extra
    in ScoreBase
@@ -776,15 +900,15 @@ mkScoreBase w target diff c extra db base =
         , sbDb = db
         , sbChar = c
         , sbExtra = extra
-        , sbBaseResists = resistRows diff srcBase
-        , sbBaseKeyTotals = keyTotalsOf srcBase
+        , sbBaseResists = resistRows diff (plainSources srcBase)
+        , sbBaseKeyTotals = keyTotalsOf (plainSources srcBase)
         , sbBaseDps = estTotalDpsOf db c srcBase
         }
 
 -- | The single number we treat as "damage" for upgrade scoring: the highest
 -- active attack's DPS plus every always-on proc folded in (procs fire while
 -- you attack), so its delta approximates the real change to sustained output.
-estTotalDpsOf :: GameDb -> Character -> [(Text, Record)] -> Double
+estTotalDpsOf :: GameDb -> Character -> [(Source, Record)] -> Double
 estTotalDpsOf db c src =
   let rows = attackDps db src c
       actives = filter ((== Active) . adKind) rows
@@ -800,8 +924,8 @@ scoreItems
   -> (Double, [(Text, Double, Double)], Double, Double, Double)
 scoreItems sb over =
   let srcO = statSources (sbDb sb) over ++ sbExtra sb
-      rO = resistRows (sbDiff sb) srcO
-      kO = keyTotalsOf srcO
+      rO = resistRows (sbDiff sb) (plainSources srcO)
+      kO = keyTotalsOf (plainSources srcO)
       pen x = let d = sbTarget sb - x in if d > 0 then d * d else 0
       paired = zip (sbBaseResists sb) rO
       changes = [(n, b, a) | ((n, b, _, _), (_, a, _, _)) <- paired, b /= a]
@@ -822,7 +946,7 @@ scoreItems sb over =
 -- (devotions, mastery, skill buffs), held constant across candidates. @slotOcc@
 -- selects which equipped item of the candidate's slot type to replace (e.g. the
 -- second ring), so symmetric slots can be compared independently.
-findUpgrades :: Weights -> Double -> Difficulty -> Int -> Character -> [(Text, Record)] -> GameDb -> [Item] -> [(Text, Item)] -> [UpgradeRow]
+findUpgrades :: Weights -> Double -> Difficulty -> Int -> Character -> [(Source, Record)] -> GameDb -> [Item] -> [(Text, Item)] -> [UpgradeRow]
 findUpgrades w target diff slotOcc c extra db base candidates =
   sortOn (negate . urScore) [r | (loc, cand) <- candidates, let r = scoreOne loc cand, urScore r > 0]
   where
@@ -918,25 +1042,67 @@ atRank i v = case v of
 -- triggers are modelled (on attack/hit/melee); on-crit/block/kill/low-health and
 -- persistent multi-hit ground effects are skipped or counted as a single hit.
 -- No crit or enemy resistances.
-attackDps :: GameDb -> [(Text, Record)] -> Character -> [AttackDps]
+attackDps :: GameDb -> [(Source, Record)] -> Character -> [AttackDps]
 attackDps db sources c =
   sortOn (negate . adDps) actives ++ sortOn (negate . adDps) procs
   where
     actives = [r | m <- weaponRow : map compute (charSkills c), Just r <- [m]]
     procs = [r | m <- map computeWps (charSkills c) ++ itemProcs ++ devoProcs ++ onHitProcs, Just r <- [m]]
-    lv = collectSkillLevels sources
-    totalPct = sumField sources "offensiveTotalDamageModifier"
-    aps = assumedBaseAttackSpeed * (1 + sumField sources "characterAttackSpeedModifier" / 100)
+    lv = collectSkillLevels (plainSources sources)
+    aps = assumedBaseAttackSpeed * (1 + sumField (plainSources sources) "characterAttackSpeedModifier" / 100)
     -- conversions from gear/buffs apply to every skill
     globalConv = concatMap (recordConversions . snd) sources
-    pctOf stem = sumField sources ("offensive" <> stem <> "Modifier") + totalPct
-    -- total retaliation damage of a type (flat x its retaliation % modifiers)
-    retalTotalOf stem =
-      let (lo, hi) = sumRange sources ["retaliation"] stem
-          pct = sumField sources ("retaliation" <> stem <> "Modifier") + sumField sources "retaliationTotalDamageModifier"
-       in (lo + hi) / 2 * (1 + pct / 100)
-    -- "% retaliation damage added to attack" from gear/buffs (applies to every skill)
-    rdaGlobal = sumField sources "retaliationDamagePct"
+    -- The retaliation-added-to-attack chain, keyed by raw stem token (e.g.
+    -- "Fire"): each stem's own flat retaliation stat (x its own % modifiers)
+    -- and the shared "% of retaliation damage added to attack" (global gear/
+    -- buff sources plus any sibling skill's own value, e.g. Reprisal). This
+    -- is the single computation both 'typedDamage' (feeding the aggregate
+    -- flat term via 'rawFlatVectors') and 'attackDpsBreakdown' use, so the
+    -- two can never disagree.
+    retaliationByStem :: [(Source, Record)] -> [(Source, Int, Record)] -> HM.HashMap Text RetaliationTypeDetail
+    retaliationByStem srcs sibs =
+      HM.fromList
+        [ (stem, d)
+        | (stem, tok) <- damageElems
+        , let d = mkDetail stem (effectDisplay ["offensive"] tok)
+        , rtdFlatSubtotal d /= 0 || rtdAddedToAttack d /= 0
+        ]
+      where
+        addContribs = retaliationAddToAttack srcs sibs
+        addTotal = sum (map saValue addContribs)
+        mkDetail stem lbl =
+          RetaliationTypeDetail
+            { rtdLabel = lbl
+            , rtdFlatSources = flatContribs
+            , rtdFlatSubtotal = flatSubtotal
+            , rtdPercentSources = pctContribs
+            , rtdTotalPercent = pctTotal
+            , rtdRetaliationDamage = retalDamage
+            , rtdAddedToAttack = retalDamage * addTotal / 100
+            }
+          where
+            flatContribs =
+              [ SourceAmount s v
+              | (s, r) <- srcs
+              , let (lo, hi) = sumRange [(srcKey s, r)] ["retaliation"] stem
+                    v = (lo + hi) / 2
+              , v /= 0
+              ]
+            flatSubtotal = sum (map saValue flatContribs)
+            pctContribs =
+              [ SourceAmount s v
+              | (s, r) <- srcs
+              , let v =
+                      fromMaybe 0 (recNum r ("retaliation" <> stem <> "Modifier"))
+                        + fromMaybe 0 (recNum r "retaliationTotalDamageModifier")
+              , v /= 0
+              ]
+            pctTotal = sum (map saValue pctContribs)
+            retalDamage = flatSubtotal * (1 + pctTotal / 100)
+    retaliationAddToAttack :: [(Source, Record)] -> [(Source, Int, Record)] -> [SourceAmount]
+    retaliationAddToAttack srcs sibs =
+      [SourceAmount s v | (s, r) <- srcs, let v = fromMaybe 0 (recNum r "retaliationDamagePct"), v /= 0]
+        ++ [SourceAmount s v | (s, i, r) <- sibs, let v = maybe 0 (atRank i) (HM.lookup "retaliationDamagePct" r), v /= 0]
     -- expected % cooldown reduction from a record at rank i: a flat reduction, or
     -- (reduction x chance) when it is a chance-based reset (e.g. Reprisal).
     cdrContrib i r =
@@ -945,8 +1111,6 @@ attackDps db sources c =
             Just _ -> red * maybe 0 (atRank i) (HM.lookup "skillCooldownReductionChance" r) / 100
             Nothing -> red
     srcCdr = sum [cdrContrib 0 r | (_, r) <- sources]
-    -- gear/buff records paired with a (scalar) rank index, for DoT/CDR aggregation
-    srcRecs = [(0 :: Int, r) | (_, r) <- sources]
     aggIn recs key = sum [maybe 0 (atRank i) (HM.lookup key r) | (i, r) <- recs]
     -- the lowercased template name of a record
     tmpl r = maybe "" T.toLower (HM.lookup "templateName" r >>= valueText)
@@ -975,7 +1139,7 @@ attackDps db sources c =
     -- secondaries that share its base name) — other primary attacks that happen to
     -- share a base (e.g. the weapon-pool attacks) are kept separate.
     sibsOf s =
-      [ (rankWith lv sib - 1, rr)
+      [ (mkSource (skName sib) SrcSkill (skillDisplayName db (skName sib)), rankWith lv sib - 1, rr)
       | sib <- charSkills c
       , skillBase (skName sib) == skillBase (skName s)
       , skLevel sib > 0
@@ -984,7 +1148,8 @@ attackDps db sources c =
       ]
     emit s =
       let sibs = sibsOf s
-       in mkRow (skillDisplayName db (skName s)) (Just (rankWith lv s)) (aggIn sibs "weaponDamagePct") (aggIn sibs "skillCooldownTime") sibs
+          sibs2 = map (\(_, i, rr) -> (i, rr)) sibs
+       in mkRow (skillDisplayName db (skName s)) (Just (rankWith lv s)) (aggIn sibs2 "weaponDamagePct") (aggIn sibs2 "skillCooldownTime") sibs
     -- a WPS row: weapon-scaled per-hit like an attack, but contributing only on
     -- the @chance@ fraction of swings it replaces, so it adds to your spammed
     -- attack rather than being an alternative to it.
@@ -992,87 +1157,176 @@ attackDps db sources c =
       let sibs = sibsOf s
           rank = rankWith lv s
           chance = maybe 0 (atRank (rank - 1)) (HM.lookup "skillChanceWeight" r) / 100
-          typed = typedDamage (aggIn sibs "weaponDamagePct") sibs
-          perHit = sum (map snd typed)
+          typed = typedDamage (aggIn (map (\(_, i, rr) -> (i, rr)) sibs) "weaponDamagePct") sibs
+          perHit = sum (map tdTotal typed)
           rate = showInt (chance * 100) <> "% WPS on attack"
        in if perHit <= 0 || chance <= 0
             then Nothing
-            else Just (AttackDps (skillDisplayName db (skName s)) (Just rank) Triggered perHit (perHit * chance * aps) rate typed)
+            else Just (AttackDps (skillDisplayName db (skName s)) (Just rank) Triggered perHit (perHit * chance * aps) rate [(tdLabel t, tdTotal t) | t <- typed])
     -- the bare auto-attack: 100% weapon damage, no skill, spammed at attack speed
     weaponRow = mkRow "Weapon Attack" Nothing 100 0 []
+    -- Every source's raw (pre-conversion) flat contribution across damage
+    -- stems, before % modifiers: gear/weapon sources (wpnPct-scaled), skill/
+    -- modifier sources (their own flat, unscaled — matches the old `sflat`),
+    -- and the retaliation-added-to-attack pseudo-source. One vector per
+    -- source so conversions (a linear redistribution) can be applied
+    -- per-source and still sum to the correct aggregate.
+    rawFlatVectors :: Double -> [(Source, Int, Record)] -> [(Source, HM.HashMap Text Double)]
+    rawFlatVectors wpnPct sibs =
+      [ (s, vec)
+      | (s, r) <- sources
+      , let vec =
+              HM.fromList
+                [ (stem, v)
+                | (stem, _) <- damageElems
+                , let (lo, hi) = sumRange [(srcKey s, r)] ["offensive", "offensiveBase", "offensiveBonus"] stem
+                      v = (lo + hi) / 2 * wpnPct / 100
+                , v /= 0
+                ]
+      , not (HM.null vec)
+      ]
+        ++ [ (s, vec)
+           | (s, i, r) <- sibs
+           , let vec =
+                   HM.fromList
+                     [ (stem, v)
+                     | (stem, _) <- damageElems
+                     , let v =
+                             ( maybe 0 (atRank i) (HM.lookup ("offensive" <> stem <> "Min") r)
+                                 + maybe 0 (atRank i) (HM.lookup ("offensive" <> stem <> "Max") r)
+                             )
+                               / 2
+                     , v /= 0
+                     ]
+           , not (HM.null vec)
+           ]
+        ++ [ (retaliationPseudoSource, HM.map rtdAddedToAttack byStem)
+           | let byStem = retaliationByStem sources sibs
+           , not (HM.null byStem)
+           ]
+    -- Every source's raw (pre-conversion) DoT contribution across every DoT
+    -- stem (per-application total: (min+max)/2 x duration), before duration/
+    -- damage % modifiers. Built across *all* stems per source (not just the
+    -- stem currently being reported) so a conversion — which can move a
+    -- source's contribution from one stem to another — has the origin
+    -- stem's raw value available when converting.
+    rawDotVectors :: Double -> [(Source, Int, Record)] -> [(Source, HM.HashMap Text Double)]
+    rawDotVectors wpnPct sibs =
+      [ (s, vec)
+      | (s, r) <- sources
+      , let vec = HM.fromList [(stem, v) | (stem, _) <- dotElems, let v = perRec stem (0, r) * wpnPct / 100, v /= 0]
+      , not (HM.null vec)
+      ]
+        ++ [ (s, vec)
+           | (s, i, r) <- sibs
+           , let vec = HM.fromList [(stem, v) | (stem, _) <- dotElems, let v = perRec stem (i, r), v /= 0]
+           , not (HM.null vec)
+           ]
+      where
+        perRec stem (i, r) =
+          ( maybe 0 (atRank i) (HM.lookup ("offensiveSlow" <> stem <> "Min") r)
+              + maybe 0 (atRank i) (HM.lookup ("offensiveSlow" <> stem <> "Max") r)
+          )
+            / 2
+            * maybe 0 (atRank i) (HM.lookup ("offensiveSlow" <> stem <> "DurationMin") r)
     -- The per-type per-application damage for a group of contributing records
     -- @sibs@ (rank-indexed), with weapon damage scaling @wpnPct@: weapon flat (from
     -- gear in @sources@) + retaliation-added, x weapon%, plus the records' own flat;
     -- conversions; then % damage modifiers. Plus the stacking-DoT term. The weapon
     -- attack and skills pass @wpnPct@/@sibs@; procs pass @wpnPct = 0@ and the single
     -- proc record (its damage is flat, not weapon-scaled).
+    typedDamage :: Double -> [(Source, Int, Record)] -> [TypeDetail]
     typedDamage wpnPct sibs =
-      let dotRecs = srcRecs ++ sibs
-          rdaPct = rdaGlobal + sum [maybe 0 (atRank i) (HM.lookup "retaliationDamagePct" rr) | (i, rr) <- sibs]
-          sflat stem =
-            sum
-              [ (maybe 0 (atRank i) (HM.lookup ("offensive" <> stem <> "Min") rr) + maybe 0 (atRank i) (HM.lookup ("offensive" <> stem <> "Max") rr)) / 2
-              | (i, rr) <- sibs
+      [ TypeDetail
+          { tdLabel = lbl
+          , tdTotal = total
+          , tdFlatSources = flatContribs
+          , tdFlatSubtotal = flatSubtotal
+          , tdPercentSources = pctContribs
+          , tdTotalPercent = pctTotal
+          , tdDurationSources = []
+          , tdTotalDurationPercent = 0
+          , tdDamagePctSources = []
+          , tdTotalDamagePercent = 0
+          }
+      | (stem, tok) <- damageElems
+      , let lbl = effectDisplay ["offensive"] tok
+            convs = globalConv ++ concatMap (recordConversions . (\(_, _, r) -> r)) sibs
+            convVecs = [(s, applyConversions convs v) | (s, v) <- rawFlatVectors wpnPct sibs]
+            flatContribs = [SourceAmount s v | (s, vec) <- convVecs, let v = HM.lookupDefault 0 stem vec, v /= 0]
+            flatSubtotal = sum (map saValue flatContribs)
+            pctContribs =
+              [ SourceAmount s v
+              | (s, r) <- sources
+              , let v = fromMaybe 0 (recNum r ("offensive" <> stem <> "Modifier")) + fromMaybe 0 (recNum r "offensiveTotalDamageModifier")
+              , v /= 0
               ]
-          flatOf stem =
-            let (lo, hi) = sumRange sources ["offensive", "offensiveBase", "offensiveBonus"] stem
-                wflat = (lo + hi) / 2
-                -- Retaliation added to attack is a flat per-hit addition (like a
-                -- skill's own flat), NOT part of the weapon-scaled damage, so it
-                -- is added outside the weapon% multiplier.
-                rdaFlat = retalTotalOf stem * rdaPct / 100
-             in wflat * wpnPct / 100 + rdaFlat + sflat stem
-          flat0 = HM.fromList [(stem, flatOf stem) | (stem, _) <- damageElems]
-          skillConv = concatMap (recordConversions . snd) sibs
-          flat = applyConversions (globalConv ++ skillConv) flat0
-          immediate =
-            [ (effectDisplay ["offensive"] tok, v)
-            | (stem, tok) <- damageElems
-            , let v = HM.lookupDefault 0 stem flat * (1 + pctOf stem / 100)
-            , v >= 1
-            ]
-          dotRaw stem =
-            let perRec (i, r) =
-                  (maybe 0 (atRank i) (HM.lookup ("offensiveSlow" <> stem <> "Min") r) + maybe 0 (atRank i) (HM.lookup ("offensiveSlow" <> stem <> "Max") r)) / 2
-                    * maybe 0 (atRank i) (HM.lookup ("offensiveSlow" <> stem <> "DurationMin") r)
-                gearDot = sum (map perRec srcRecs)
-                skillDot = sum (map perRec sibs)
-             in gearDot * wpnPct / 100 + skillDot
-          dotConv = applyConversions (globalConv ++ skillConv) (HM.fromList [(stem, dotRaw stem) | (stem, _) <- dotElems])
-          dotMods stem =
-            (1 + aggIn dotRecs ("offensiveSlow" <> stem <> "DurationModifier") / 100)
-              * (1 + (aggIn dotRecs ("offensiveSlow" <> stem <> "Modifier") + totalPct) / 100)
-          dot =
-            [ (effectDisplay ["offensive", "slow"] tok <> " (dot)", v)
-            | (stem, tok) <- dotElems
-            , let v = HM.lookupDefault 0 stem dotConv * dotMods stem
-            , v >= 1
-            ]
-       in immediate ++ dot
+            pctTotal = sum (map saValue pctContribs)
+            total = flatSubtotal * (1 + pctTotal / 100)
+      , total >= 1
+      ]
+        ++ [ TypeDetail
+              { tdLabel = effectDisplay ["offensive", "slow"] tok <> " (dot)"
+              , tdTotal = total
+              , tdFlatSources = flatContribs
+              , tdFlatSubtotal = flatSubtotal
+              , tdPercentSources = []
+              , tdTotalPercent = 0
+              , tdDurationSources = durContribs
+              , tdTotalDurationPercent = durTotal
+              , tdDamagePctSources = dmgContribs
+              , tdTotalDamagePercent = dmgTotal
+              }
+           | (stem, tok) <- dotElems
+           , let dotRecs = srcRecsFor sources ++ sibs
+                 convs = globalConv ++ concatMap (recordConversions . (\(_, _, r) -> r)) sibs
+                 convVecs = [(s, applyConversions convs v) | (s, v) <- rawDotVectors wpnPct sibs]
+                 flatContribs = [SourceAmount s v | (s, vec) <- convVecs, let v = HM.lookupDefault 0 stem vec, v /= 0]
+                 flatSubtotal = sum (map saValue flatContribs)
+                 durContribs =
+                   [ SourceAmount s v
+                   | (s, i, r) <- dotRecs
+                   , let v = maybe 0 (atRank i) (HM.lookup ("offensiveSlow" <> stem <> "DurationModifier") r)
+                   , v /= 0
+                   ]
+                 durTotal = sum (map saValue durContribs)
+                 dmgContribs =
+                   [SourceAmount s v | (s, r) <- sources, let v = fromMaybe 0 (recNum r "offensiveTotalDamageModifier"), v /= 0]
+                     ++ [ SourceAmount s v
+                        | (s, i, r) <- dotRecs
+                        , let v = maybe 0 (atRank i) (HM.lookup ("offensiveSlow" <> stem <> "Modifier") r)
+                        , v /= 0
+                        ]
+                 dmgTotal = sum (map saValue dmgContribs)
+                 total = flatSubtotal * (1 + durTotal / 100) * (1 + dmgTotal / 100)
+           , total >= 1
+           ]
+      where
+        srcRecsFor srcs = [(s, 0 :: Int, r) | (s, r) <- srcs]
     -- an actively-used attack (skill group or weapon attack): spam at attack speed
     -- (weapon%) or once per cooldown.
     mkRow name mRank wpnPct cdBase sibs =
-      let cdr = srcCdr + sum [cdrContrib i rr | (i, rr) <- sibs]
+      let cdr = srcCdr + sum [cdrContrib i rr | (_, i, rr) <- sibs]
           cd = max 0.1 (cdBase * (1 - cdr / 100)) -- floored so heavy CDR can't blow up the rate
           typed = typedDamage wpnPct sibs
-          perHit = sum (map snd typed)
+          perHit = sum (map tdTotal typed)
           (dps, rate)
             | cdBase > 0 = (perHit / cd, oneDp cd <> "s cooldown")
             | wpnPct > 0 = (perHit * aps, "~" <> oneDp aps <> "/s attacks (assumed base)")
             | otherwise = (0, "")
        in if perHit <= 0 || T.null rate
             then Nothing
-            else Just (AttackDps name mRank Active perHit dps rate typed)
+            else Just (AttackDps name mRank Active perHit dps rate [(tdLabel t, tdTotal t) | t <- typed])
     -- a proc: fires automatically on attack/hit at chance @p@, no more than once
     -- per cooldown. Expected interval = cooldown + the geometric wait for the next
     -- successful roll (@1 / (p x attacks-per-second)@). Damage is flat (no weapon
     -- scaling). @rank@ is the granted/invested level used to index value arrays.
     mkProc name rank rec p cd trig =
-      let typed = typedDamage 0 [(rank - 1, rec)]
-          perHit = sum (map snd typed)
+      let typed = typedDamage 0 [(mkSource "__proc__" SrcSkill name, rank - 1, rec)]
+          perHit = sum (map tdTotal typed)
           interval = cd + 1 / max 0.01 (p * aps)
           rate = showInt (p * 100) <> "% on " <> trig <> ", " <> oneDp cd <> "s cd"
-       in if perHit <= 0 then Nothing else Just (AttackDps name Nothing Triggered perHit (perHit / interval) rate typed)
+       in if perHit <= 0 then Nothing else Just (AttackDps name Nothing Triggered perHit (perHit / interval) rate [(tdLabel t, tdTotal t) | t <- typed])
     showInt x = T.pack (show (round x :: Integer))
     levelOf v = maybe 1 id (v >>= valueText >>= (readMaybe . T.unpack))
     -- procs granted by equipped items (itemSkillName + a cast_@... controller)
