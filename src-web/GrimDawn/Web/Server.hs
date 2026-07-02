@@ -40,9 +40,9 @@ import GrimDawn.Db (GameDb, loadGameDb)
 import GrimDawn.Formulas (craftableItems, loadKnownFormulas)
 import GrimDawn.Gdc (Character (..), itemBaseName, itemWithName)
 import GrimDawn.Item (iaBitmap, itemAttrs)
-import GrimDawn.Report.Stats (Difficulty (..), parseDifficulty)
+import GrimDawn.Report.Stats (AttackKind (..), Difficulty (..), parseDifficulty)
 import GrimDawn.Web.Texture (decodeTexture)
-import GrimDawn.Web.View (GearOverride (..), craftableBlueprints, detailView, enhancementCatalog, rankEnhancements, rankItems, setsView, skillDictionary, summaryView)
+import GrimDawn.Web.View (GearOverride (..), attackBreakdownView, craftableBlueprints, detailView, enhancementCatalog, rankEnhancements, rankItems, setsView, skillDictionary, summaryView)
 
 data ServeOpts = ServeOpts
   { soPort :: !Int
@@ -153,6 +153,31 @@ routes db texCache opts = do
       Nothing -> do
         status status404
         text ("no character named " <> TL.fromStrict name)
+
+  -- The DPS attribution breakdown for one attack/proc row: which sources
+  -- contribute how much flat damage and how many percentage points, a
+  -- retaliation-added-to-attack chain, rate factors, and a DPS-impact
+  -- ranking. Identified by name + optional rank + kind, matching a row
+  -- already returned by /api/characters/:name.
+  get "/api/characters/:name/attack-breakdown" $ do
+    name <- pathParam "name"
+    attackName <- queryParam "attack"
+    rank <- (readMaybe . T.unpack =<<) <$> queryParamMaybe "rank"
+    kindParam <- queryParam "kind"
+    let kind = if (kindParam :: Text) == "proc" then Triggered else Active
+    overrides <- parseOverrides . queryString <$> request
+    diff <- difficultyParam
+    chars <- loadOr (loadCharacters (soDataDir opts))
+    owned <- loadOr (loadOwnedItems (soDataDir opts))
+    case findChar name chars of
+      Nothing -> do
+        status status404
+        text ("no character named " <> TL.fromStrict name)
+      Just c -> case attackBreakdownView db owned overrides diff c attackName rank kind of
+        Just abv -> json abv
+        Nothing -> do
+          status status404
+          text "no matching attack/proc row"
 
   -- An item's icon, decoded from the asset archive's .tex to PNG. 404s cleanly
   -- when the texture archive isn't synced or the icon can't be decoded, so the
