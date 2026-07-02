@@ -19,6 +19,7 @@ module GrimDawn.Report.Stats
   , SourceImpact (..)
   , AttackBreakdown (..)
   , attackDpsBreakdown
+  , retaliationPseudoSource
   , statSources
   , devotionSources
   , masterySources

@@ -3,12 +3,12 @@ module GrimDawn.Web.ViewSpec (spec) where
 import Data.Aeson (encode)
 import qualified Data.ByteString.Lazy.Char8 as BL
 import qualified Data.HashMap.Strict as HM
-import Data.List (isInfixOf)
+import Data.List (isInfixOf, sortOn)
 import GrimDawn.Aggregate (Location (..), OwnedItem (..))
 import GrimDawn.Arz (Value (..))
 import GrimDawn.Db (GameDb (..))
-import GrimDawn.Gdc (Character (..), Item (..))
-import GrimDawn.Report.Stats (Difficulty (..))
+import GrimDawn.Gdc (Character (..), Item (..), Skill (..))
+import GrimDawn.Report.Stats (AttackKind (..), Difficulty (..))
 import GrimDawn.Web.View
 import Test.Hspec
 
@@ -43,6 +43,22 @@ synthDb =
                 , ("defensiveFire", VFloat 40)
                 ]
             )
+          , ( "records/items/weapon.dbr"
+            , HM.fromList
+                [ ("Class", VString "WeaponMelee_Sword")
+                , ("offensivePhysicalMin", VFloat 100)
+                , ("offensivePhysicalMax", VFloat 100)
+                ]
+            )
+          , ( "records/skills/playerclass01/atk1.dbr"
+            , HM.fromList
+                [ ("templateName", VString "database/templates/skill_attack.tpl")
+                , ("weaponDamagePct", VFloat 100)
+                , ("offensiveFireMin", VFloat 50)
+                , ("offensiveFireMax", VFloat 50)
+                , ("skillCooldownTime", VFloat 2)
+                ]
+            )
           ]
     , gdbText = HM.empty
     }
@@ -53,6 +69,16 @@ owned = [OwnedItem blankItem {itemBaseName = "m1"} SharedStash]
 hero :: Character
 hero =
   Character "Hero" "tagClass" 50 True [blankItem {itemBaseName = "records/items/helm.dbr"}] [] [] [] 0 0 0 0 0 []
+
+weapon :: Item
+weapon = blankItem {itemBaseName = "records/items/weapon.dbr"}
+
+heroWithAttack :: Character
+heroWithAttack =
+  hero
+    { charEquipped = charEquipped hero ++ [weapon]
+    , charSkills = [Skill "records/skills/playerclass01/atk1.dbr" 1 True 0 0 0 False False "" ""]
+    }
 
 spec :: Spec
 spec = do
@@ -110,6 +136,20 @@ spec = do
           [_, m2] = svMembers sv
       smvCraftable m2 `shouldBe` True
       smvTransmutable m2 `shouldBe` False
+
+  describe "attackBreakdownView" $ do
+    it "returns Nothing for an unknown attack name" $
+      attackBreakdownView synthDb owned [] Ultimate heroWithAttack "Nonexistent" Nothing Active `shouldBe` Nothing
+
+    it "encodes a known attack's breakdown with category strings and a sorted impact list" $ do
+      case attackBreakdownView synthDb owned [] Ultimate heroWithAttack "Weapon Attack" Nothing Active of
+        Nothing -> expectationFailure "expected a breakdown"
+        Just abv -> do
+          let json = BL.unpack (encode abv)
+          ("\"kind\":\"active\"" `isInfixOf` json) `shouldBe` True
+          ("\"category\":\"gear\"" `isInfixOf` json) `shouldBe` True
+          let impacts = map (abs . sivDpsImpact) (abvSourcesByImpact abv)
+          impacts `shouldBe` sortOn negate impacts -- sorted by |impact| descending
 
   describe "detailView" $ do
     let dv = detailView synthDb [] [] Ultimate hero

@@ -37,6 +37,16 @@ module GrimDawn.Web.View
   , RankView (..)
   , rankItems
   , ItemRankView (..)
+  , SourceCategoryView
+  , SourceContributionView (..)
+  , TypeBreakdownView (..)
+  , RetaliationTypeBreakdownView (..)
+  , RetaliationBreakdownView (..)
+  , RateFactorView (..)
+  , TriggerView (..)
+  , SourceImpactView (..)
+  , AttackBreakdownView (..)
+  , attackBreakdownView
   ) where
 
 import Data.Aeson (Options (..), ToJSON (..), defaultOptions, genericToJSON)
@@ -80,13 +90,24 @@ import GrimDawn.Report.Sets
   , smOwned
   )
 import GrimDawn.Report.Stats
-  ( AttackDps (..)
+  ( AttackBreakdown (..)
+  , AttackDps (..)
   , AttackKind (..)
   , BuffToggle (..)
   , Difficulty (..)
+  , RateFactorDetail (..)
+  , RetaliationDetail (..)
+  , RetaliationTypeDetail (..)
   , ScoreBase
+  , Source (..)
+  , SourceAmount (..)
+  , SourceCategory (..)
+  , SourceImpact (..)
   , StatSummary (..)
+  , TriggerDetail (..)
+  , TypeDetail (..)
   , attackDps
+  , attackDpsBreakdown
   , defaultUpgradeTarget
   , defaultWeights
   , devotionSources
@@ -94,6 +115,7 @@ import GrimDawn.Report.Stats
   , masterySources
   , mkScoreBase
   , plainSources
+  , retaliationPseudoSource
   , scoreItems
   , skillSources
   , statSources
@@ -784,6 +806,198 @@ toAttackView a =
     , avRate = adRate a
     , avTypes = [NamedValueView t d | (t, d) <- adTypes a]
     }
+
+-- | JSON text for a 'SourceCategory', plus the one synthetic value
+-- ("retaliation") used only for the "Retaliation added to attack" flat line
+-- within a 'TypeBreakdownView' (see 'retaliationPseudoSource') — not a real
+-- 'SourceCategory' constructor, since it's a computed aggregate of several
+-- real sources, not one source.
+type SourceCategoryView = Text
+
+sourceCategoryView :: Source -> SourceCategoryView
+sourceCategoryView s
+  | s == retaliationPseudoSource = "retaliation"
+  | otherwise = case srcCategory s of
+      SrcGear -> "gear"
+      SrcComponent -> "component"
+      SrcAugment -> "augment"
+      SrcSetBonus -> "setBonus"
+      SrcDevotion -> "devotion"
+      SrcMastery -> "mastery"
+      SrcSkill -> "skill"
+      SrcOther -> "other"
+
+data SourceContributionView = SourceContributionView
+  { scvLabel :: !Text
+  , scvCategory :: !SourceCategoryView
+  , scvValue :: !Double
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON SourceContributionView where toJSON = genericToJSON opts
+
+toContributionView :: SourceAmount -> SourceContributionView
+toContributionView sa = SourceContributionView (srcLabel (saSource sa)) (sourceCategoryView (saSource sa)) (saValue sa)
+
+data SourceImpactView = SourceImpactView
+  { sivLabel :: !Text
+  , sivCategory :: !SourceCategoryView
+  , sivDpsImpact :: !Double
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON SourceImpactView where toJSON = genericToJSON opts
+
+toImpactView :: SourceImpact -> SourceImpactView
+toImpactView si = SourceImpactView (srcLabel (siSource si)) (sourceCategoryView (siSource si)) (siDpsImpact si)
+
+data TypeBreakdownView = TypeBreakdownView
+  { tbvLabel :: !Text
+  , tbvTotal :: !Double
+  , tbvFlat :: ![SourceContributionView]
+  , tbvFlatSubtotal :: !Double
+  , tbvPercent :: ![SourceContributionView]
+  , tbvTotalPercent :: !Double
+  , tbvDurationPercent :: ![SourceContributionView]
+  , tbvTotalDurationPercent :: !Double
+  , tbvDamagePercent :: ![SourceContributionView]
+  , tbvTotalDamagePercent :: !Double
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON TypeBreakdownView where toJSON = genericToJSON opts
+
+toTypeBreakdownView :: TypeDetail -> TypeBreakdownView
+toTypeBreakdownView t =
+  TypeBreakdownView
+    { tbvLabel = tdLabel t
+    , tbvTotal = tdTotal t
+    , tbvFlat = map toContributionView (tdFlatSources t)
+    , tbvFlatSubtotal = tdFlatSubtotal t
+    , tbvPercent = map toContributionView (tdPercentSources t)
+    , tbvTotalPercent = tdTotalPercent t
+    , tbvDurationPercent = map toContributionView (tdDurationSources t)
+    , tbvTotalDurationPercent = tdTotalDurationPercent t
+    , tbvDamagePercent = map toContributionView (tdDamagePctSources t)
+    , tbvTotalDamagePercent = tdTotalDamagePercent t
+    }
+
+data RetaliationTypeBreakdownView = RetaliationTypeBreakdownView
+  { rtbvLabel :: !Text
+  , rtbvFlat :: ![SourceContributionView]
+  , rtbvFlatSubtotal :: !Double
+  , rtbvPercent :: ![SourceContributionView]
+  , rtbvTotalPercent :: !Double
+  , rtbvRetaliationDamage :: !Double
+  , rtbvAddedToAttack :: !Double
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON RetaliationTypeBreakdownView where toJSON = genericToJSON opts
+
+toRetaliationTypeView :: RetaliationTypeDetail -> RetaliationTypeBreakdownView
+toRetaliationTypeView t =
+  RetaliationTypeBreakdownView
+    { rtbvLabel = rtdLabel t
+    , rtbvFlat = map toContributionView (rtdFlatSources t)
+    , rtbvFlatSubtotal = rtdFlatSubtotal t
+    , rtbvPercent = map toContributionView (rtdPercentSources t)
+    , rtbvTotalPercent = rtdTotalPercent t
+    , rtbvRetaliationDamage = rtdRetaliationDamage t
+    , rtbvAddedToAttack = rtdAddedToAttack t
+    }
+
+data RetaliationBreakdownView = RetaliationBreakdownView
+  { rbvAddToAttackPct :: ![SourceContributionView]
+  , rbvTotalAddToAttackPct :: !Double
+  , rbvByType :: ![RetaliationTypeBreakdownView]
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON RetaliationBreakdownView where toJSON = genericToJSON opts
+
+toRetaliationView :: RetaliationDetail -> RetaliationBreakdownView
+toRetaliationView rd =
+  RetaliationBreakdownView
+    { rbvAddToAttackPct = map toContributionView (rdAddToAttackSources rd)
+    , rbvTotalAddToAttackPct = rdTotalAddToAttackPct rd
+    , rbvByType = map toRetaliationTypeView (rdByType rd)
+    }
+
+data RateFactorView = RateFactorView
+  { rfvLabel :: !Text
+  , rfvBase :: !Double
+  , rfvContributions :: ![SourceContributionView]
+  , rfvEffective :: !Double
+  , rfvFormula :: !Text
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON RateFactorView where toJSON = genericToJSON opts
+
+toRateFactorView :: RateFactorDetail -> RateFactorView
+toRateFactorView r = RateFactorView (rfdLabel r) (rfdBase r) (map toContributionView (rfdSources r)) (rfdEffective r) (rfdFormula r)
+
+data TriggerView = TriggerView
+  { trvChancePct :: !Double
+  , trvCooldown :: !Double
+  , trvGrantedBy :: !Text
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON TriggerView where toJSON = genericToJSON opts
+
+toTriggerView :: TriggerDetail -> TriggerView
+toTriggerView t = TriggerView (trgChancePct t) (trgCooldown t) (trgGrantedBy t)
+
+data AttackBreakdownView = AttackBreakdownView
+  { abvName :: !Text
+  , abvRank :: !(Maybe Int)
+  , abvKind :: !Text
+  , abvPerHit :: !Double
+  , abvDps :: !Double
+  , abvRate :: !Text
+  , abvSourcesByImpact :: ![SourceImpactView]
+  , abvTypes :: ![TypeBreakdownView]
+  , abvRetaliation :: !(Maybe RetaliationBreakdownView)
+  , abvRateFactors :: ![RateFactorView]
+  , abvTrigger :: !(Maybe TriggerView)
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON AttackBreakdownView where toJSON = genericToJSON opts
+
+-- | The DPS attribution breakdown for one attack/proc row, identified by
+-- name/rank/kind (matching an 'Attack'/'AttackDps' row already shown on the
+-- character page). Mirrors 'detailView''s effective-sources construction so
+-- the breakdown reflects the same what-if overrides. @difficulty@ is taken
+-- for API-shape parity with 'detailView' (the same query params apply to
+-- both endpoints) but is otherwise unused here: it only affects the
+-- resistance-penalty numbers 'statSummary' computes, not the DPS estimate.
+attackBreakdownView
+  :: GameDb -> [OwnedItem] -> [GearOverride] -> Difficulty -> Character -> Text -> Maybe Int -> AttackKind -> Maybe AttackBreakdownView
+attackBreakdownView db _owned overrides _difficulty c name rank kind =
+  toView <$> attackDpsBreakdown db sources c name rank kind
+  where
+    items = applyOverrides db overrides (equippedItems c)
+    permanentBuffs = BuffToggle True False False
+    nonSkill = statSources db items ++ devotionSources db c ++ masterySources db c
+    extra = devotionSources db c ++ masterySources db c ++ skillSources permanentBuffs nonSkill db c
+    sources = statSources db items ++ extra
+    toView bd =
+      AttackBreakdownView
+        { abvName = abName bd
+        , abvRank = abRank bd
+        , abvKind = case abKind bd of Active -> "active"; Triggered -> "proc"
+        , abvPerHit = abPerHit bd
+        , abvDps = abDps bd
+        , abvRate = abRate bd
+        , abvSourcesByImpact = map toImpactView (abSourcesByImpact bd)
+        , abvTypes = map toTypeBreakdownView (abTypes bd)
+        , abvRetaliation = toRetaliationView <$> abRetaliation bd
+        , abvRateFactors = map toRateFactorView (abRateFactors bd)
+        , abvTrigger = toTriggerView <$> abTrigger bd
+        }
 
 toGearView :: Text -> Maybe Text -> Maybe Text -> ItemAttrs -> GearView
 toGearView record component augment a =
