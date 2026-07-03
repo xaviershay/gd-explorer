@@ -115,6 +115,7 @@ import GrimDawn.Report.Stats
   , masterySources
   , mkScoreBase
   , plainSources
+  , resistReductionLines
   , retaliationPseudoSource
   , scoreItems
   , skillSources
@@ -370,6 +371,7 @@ data StatSummaryView = StatSummaryView
   , ssvDamage :: ![Text] -- total damage bonuses (e.g. "+120% Acid")
   , ssvDamageTable :: ![DamageRowView] -- per-damage-type table
   , ssvCcResists :: ![ResistView] -- armor absorption + CC resists (with caps/overcap)
+  , ssvResistReduction :: ![Text] -- resistance reduction applied to enemies, one line per source
   }
   deriving (Show, Eq, Generic)
 
@@ -485,7 +487,7 @@ detailView db owned overrides difficulty c =
     , cdvLevel = fromIntegral (charLevel c)
     , cdvClassName = className db c
     , cdvHardcore = charHardcore c
-    , cdvSummary = toSummaryView difficulty (statSummary difficulty c (plainSources sources))
+    , cdvSummary = (toSummaryView difficulty (statSummary difficulty c (plainSources sources))) {ssvResistReduction = resistReductionLines db items c}
     , cdvAttacks = map toAttackView (attackDps db sources c)
     , cdvGear = map gearViewOf items
     , cdvArmorTable = armorTable items
@@ -781,6 +783,7 @@ toSummaryView diff s =
     , ssvDamage = ssDamage s
     , ssvDamageTable = map toDamageRowView (ssDamageTable s)
     , ssvCcResists = [ResistView n v cap over | (n, v, cap, over) <- ssCcResists s]
+    , ssvResistReduction = [] -- set by detailView, which has the item/skill data this needs
     }
 
 toDamageRowView :: DamageRow -> DamageRowView

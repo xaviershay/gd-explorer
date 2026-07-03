@@ -52,6 +52,8 @@ module GrimDawn.Report.Stats
   , attackDps
   , parseProcController
   , renderDps
+    -- * Resistance reduction (applied to enemies)
+  , resistReductionLines
   ) where
 
 import Data.Char (isDigit, isLower, toLower)
@@ -1094,6 +1096,96 @@ atRank i v = case v of
     num (VInt n) = fromIntegral n
     num (VFloat f) = realToFrac f
     num _ = 0
+
+--------------------------------------------------------------------------------
+-- Resistance reduction (applied to enemies)
+--------------------------------------------------------------------------------
+
+-- | The three resistance-reduction buckets Grim Dawn tracks (there is no
+-- per-element field the way there is for damage/resistance — only "all
+-- resistances", "fire+cold+lightning together", and "physical"), each with
+-- the mechanics it actually carries. Confirmed against the live game
+-- database: Physical has no @...ResistanceReductionPercent...@ variant.
+resistReductionTypes :: [(Text, Text, [Text])]
+resistReductionTypes =
+  [ ("Total", "Total", ["Absolute", "Percent"])
+  , ("Elemental", "Elemental", ["Absolute", "Percent"])
+  , ("Physical", "Physical", ["Absolute"])
+  ]
+
+-- a rank-indexed field lookup that stays Nothing when the field is absent,
+-- unlike 'atRank' (which defaults a missing field to 0) — presence is what
+-- decides whether a mechanic applies at all.
+atRankField :: Int -> Text -> Record -> Maybe Double
+atRankField i f r = atRank i <$> HM.lookup f r
+
+-- | The resistance-reduction effects a single record grants, as fully
+-- rendered fragments (no label prefix) — e.g. @"-30% Total Resistance (20%
+-- chance, 5s)"@ or @"-20 Physical Resistance"@ (chance/duration are only
+-- shown when the record actually carries them; most Elemental/Physical
+-- reductions are always-on rather than proc-based). @i@ is the rank index
+-- (0-based) for rank-scaled skill fields; gear/devotion records that are
+-- never rank-scaled always pass 0.
+resistReductionFragments :: Int -> Record -> [Text]
+resistReductionFragments i r =
+  [ fragment label isPct v chance dur
+  | (label, stem, mechanics) <- resistReductionTypes
+  , mechName <- mechanics
+  , let base = "offensive" <> stem <> "ResistanceReduction" <> mechName
+        isPct = mechName == "Percent"
+  , Just v <- [atRankField i (base <> "Min") r]
+  , v /= 0
+  , let chance = atRankField i (base <> "Chance") r
+        dur = atRankField i (base <> "DurationMin") r
+  ]
+  where
+    fragment label isPct v chance dur =
+      "-"
+        <> showN (abs v)
+        <> (if isPct then "%" else "")
+        <> " "
+        <> label
+        <> " Resistance"
+        <> suffix chance dur
+    suffix (Just c) (Just d) = " (" <> showInt c <> "% chance, " <> oneDp d <> "s)"
+    suffix (Just c) Nothing = " (" <> showInt c <> "% chance)"
+    suffix Nothing (Just d) = " (" <> oneDp d <> "s)"
+    suffix Nothing Nothing = ""
+    showInt x = T.pack (show (round x :: Integer))
+
+-- | Every resistance-reduction effect the character can apply to enemies,
+-- one line per granting source (@"<source>: <effect>"@; a source with more
+-- than one effect gets one line per effect). Scans equipped gear (base +
+-- affixes + relic + augment + active set-tiers, via 'statSources') and
+-- *every* invested skill node — devotion stars, mastery bars, and
+-- playerclass skills (attacks, passives, and their modifiers/transmuters)
+-- alike — since in practice the most common source of resistance reduction
+-- is an attack skill's own modifier (e.g. Reprisal, Field Command), which
+-- the narrower "buff" source pool 'skillSources' deliberately excludes.
+-- Skill values are rank-aware (using each skill's effective invested rank,
+-- the same @+skill levels@ scaling used elsewhere); gear/devotion records
+-- are never rank-scaled, so they're always read at index 0.
+resistReductionLines :: GameDb -> [Item] -> Character -> [Text]
+resistReductionLines db items c =
+  -- A devotion celestial power's granted "_skill" proc record often mirrors
+  -- the exact same field(s) as its constellation's own passive star record
+  -- (both resolve to the same display name too), which would otherwise
+  -- render as an identical line twice. Deduping the final rendered lines is
+  -- safer than trying to exclude specific record shapes up front: it can
+  -- only ever merge two lines that already say the same thing, never drop a
+  -- genuinely distinct effect.
+  nub (concatMap lineFor gearEntries ++ concatMap lineFor skillEntries)
+  where
+    gear = statSources db items
+    gearEntries = [(srcLabel s, 0, r) | (s, r) <- gear]
+    lv = collectSkillLevels (plainSources gear)
+    skillEntries =
+      [ (skillDisplayName db (skName s), rankWith lv s - 1, r)
+      | s <- charSkills c
+      , skLevel s > 0
+      , Just r <- [lookupRecord (skName s) db]
+      ]
+    lineFor (label, i, r) = [label <> ": " <> frag | frag <- resistReductionFragments i r]
 
 -- | Estimate per-hit damage and DPS for each invested attack skill, given the
 -- character's effective stat @sources@ (gear + buffs). Pipeline per type: the

@@ -34,6 +34,7 @@ import GrimDawn.Report.Stats
   , parseProcController
   , plainSources
   , renderStats
+  , resistReductionLines
   , skillSources
   )
 import Test.Hspec
@@ -82,6 +83,15 @@ synthDb =
             )
           , ( "records/items/ringB.dbr"
             , HM.fromList [("Class", VString "ArmorJewelry_Ring"), ("defensiveChaos", VFloat 40)]
+            )
+          , -- a weapon granting -30% Total Resistance, 20% chance, 5s duration
+            ( "records/items/resistRedSword.dbr"
+            , HM.fromList
+                [ ("Class", VString "WeaponMelee_Sword")
+                , ("offensiveTotalResistanceReductionPercentMin", VFloat 30)
+                , ("offensiveTotalResistanceReductionPercentChance", VFloat 20)
+                , ("offensiveTotalResistanceReductionPercentDurationMin", VFloat 5)
+                ]
             )
           , -- a devotion star granting +18 Defensive Ability
             ( "records/skills/devotion/tier1_15a.dbr"
@@ -162,6 +172,24 @@ synthDb =
                 , ("skillCooldownReductionChance", VFloat 25)
                 ]
             )
+          , -- a passive granting rank-scaled flat Physical Resistance Reduction
+            -- (8 at rank 1, 9 at rank 2), always-on (no chance field)
+            ( "records/skills/playerclass01/resistred1.dbr"
+            , HM.fromList
+                [ ("templateName", VString "database/templates/skill_passive.tpl")
+                , ("skillDisplayName", VString "Mark of Dreeg")
+                , ("offensivePhysicalResistanceReductionAbsoluteMin", VList [VFloat 8, VFloat 9])
+                ]
+            )
+          , -- mirrors a devotion celestial power's granted "_skill" proc record
+            -- carrying the exact same display name + effect as the star above
+            ( "records/skills/playerclass01/resistred1dup.dbr"
+            , HM.fromList
+                [ ("templateName", VString "database/templates/skill_passive.tpl")
+                , ("skillDisplayName", VString "Mark of Dreeg")
+                , ("offensivePhysicalResistanceReductionAbsoluteMin", VList [VFloat 8, VFloat 9])
+                ]
+            )
           , -- an item that grants a proc: 50% chance on attack, 2s cooldown
             ( "records/items/relicProc.dbr"
             , HM.fromList
@@ -193,11 +221,12 @@ synthDb =
     , gdbText = HM.empty
     }
 
-helm, helmB, ring, ringB :: Item
+helm, helmB, ring, ringB, resistRedSword :: Item
 helm = blankItem {itemBaseName = "records/items/helm.dbr"}
 helmB = blankItem {itemBaseName = "records/items/helmB.dbr"}
 ring = blankItem {itemBaseName = "records/items/ring.dbr"}
 ringB = blankItem {itemBaseName = "records/items/ringB.dbr"}
+resistRedSword = blankItem {itemBaseName = "records/items/resistRedSword.dbr"}
 
 items :: [Item]
 items = [blankItem {itemBaseName = "records/items/helm.dbr"}]
@@ -604,3 +633,35 @@ spec = describe "renderStats (synthetic)" $ do
     case parseBuffs "bogus" of
       Left _ -> pure ()
       Right _ -> expectationFailure "expected parse failure for bogus category"
+
+  describe "resistReductionLines" $ do
+    it "renders a gear source's chance/duration-based reduction" $ do
+      let lines_ = resistReductionLines synthDb [resistRedSword] (mkChar [])
+      any ("-30% Total Resistance (20% chance, 5.0s)" `T.isInfixOf`) lines_ `shouldBe` True
+
+    it "renders an always-on skill reduction at its invested rank" $ do
+      let ch = mkChar [mkSkillLvl "records/skills/playerclass01/resistred1.dbr" 1]
+          lines_ = resistReductionLines synthDb [] ch
+      any ("-8 Physical Resistance" `T.isInfixOf`) lines_ `shouldBe` True
+      any ("chance" `T.isInfixOf`) lines_ `shouldBe` False -- no Chance field on this record
+
+    it "scales a rank-2 skill reduction using the rank-scaled field" $ do
+      let ch = mkChar [mkSkillLvl "records/skills/playerclass01/resistred1.dbr" 2]
+          lines_ = resistReductionLines synthDb [] ch
+      any ("-9 Physical Resistance" `T.isInfixOf`) lines_ `shouldBe` True
+
+    it "combines gear and skill sources" $ do
+      let ch = mkChar [mkSkillLvl "records/skills/playerclass01/resistred1.dbr" 1]
+          lines_ = resistReductionLines synthDb [resistRedSword] ch
+      length lines_ `shouldBe` 2
+
+    it "dedupes identical lines from two records with the same display name and effect" $ do
+      -- mirrors a devotion celestial power: its granted "_skill" proc record
+      -- often carries the exact same field as its constellation's own star.
+      let ch =
+            mkChar
+              [ mkSkillLvl "records/skills/playerclass01/resistred1.dbr" 1
+              , mkSkillLvl "records/skills/playerclass01/resistred1dup.dbr" 1
+              ]
+          lines_ = resistReductionLines synthDb [] ch
+      length lines_ `shouldBe` 1
