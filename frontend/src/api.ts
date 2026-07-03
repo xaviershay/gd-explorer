@@ -128,7 +128,12 @@ export interface StatSummary {
     damage: string[];
     damageTable: DamageRow[];
     ccResists: ResistStat[];
-    resistReduction: string[]; // resistance reduction applied to enemies, one line per source
+    resistReduction: ResistReduction[]; // resistance reduction applied to enemies
+}
+
+export interface ResistReduction {
+    source: string; // granting source name, e.g. "Reprisal" -- hover it against the skill dictionary
+    effect: string; // e.g. "-30% Total (20% chance, 5s)"
 }
 
 export interface ShoppingItem {

@@ -635,27 +635,27 @@ spec = describe "renderStats (synthetic)" $ do
       Right _ -> expectationFailure "expected parse failure for bogus category"
 
   describe "resistReductionLines" $ do
-    it "renders a gear source's chance/duration-based reduction" $ do
-      let lines_ = resistReductionLines synthDb [resistRedSword] (mkChar [])
-      any ("-30% Total Resistance (20% chance, 5.0s)" `T.isInfixOf`) lines_ `shouldBe` True
+    it "pairs a gear source with its chance/duration-based reduction, no 'Resistance' suffix" $ do
+      let pairs = resistReductionLines synthDb [resistRedSword] (mkChar [])
+      pairs `shouldContain` [("records/items/resistRedSword.dbr", "-30% Total (20% chance, 5.0s)")]
 
     it "renders an always-on skill reduction at its invested rank" $ do
       let ch = mkChar [mkSkillLvl "records/skills/playerclass01/resistred1.dbr" 1]
-          lines_ = resistReductionLines synthDb [] ch
-      any ("-8 Physical Resistance" `T.isInfixOf`) lines_ `shouldBe` True
-      any ("chance" `T.isInfixOf`) lines_ `shouldBe` False -- no Chance field on this record
+          pairs = resistReductionLines synthDb [] ch
+      pairs `shouldContain` [("Mark of Dreeg", "-8 Physical")]
+      any (\(_, eff) -> "chance" `T.isInfixOf` eff) pairs `shouldBe` False -- no Chance field on this record
 
     it "scales a rank-2 skill reduction using the rank-scaled field" $ do
       let ch = mkChar [mkSkillLvl "records/skills/playerclass01/resistred1.dbr" 2]
-          lines_ = resistReductionLines synthDb [] ch
-      any ("-9 Physical Resistance" `T.isInfixOf`) lines_ `shouldBe` True
+          pairs = resistReductionLines synthDb [] ch
+      pairs `shouldContain` [("Mark of Dreeg", "-9 Physical")]
 
     it "combines gear and skill sources" $ do
       let ch = mkChar [mkSkillLvl "records/skills/playerclass01/resistred1.dbr" 1]
-          lines_ = resistReductionLines synthDb [resistRedSword] ch
-      length lines_ `shouldBe` 2
+          pairs = resistReductionLines synthDb [resistRedSword] ch
+      length pairs `shouldBe` 2
 
-    it "dedupes identical lines from two records with the same display name and effect" $ do
+    it "dedupes identical pairs from two records with the same display name and effect" $ do
       -- mirrors a devotion celestial power: its granted "_skill" proc record
       -- often carries the exact same field as its constellation's own star.
       let ch =
@@ -663,5 +663,5 @@ spec = describe "renderStats (synthetic)" $ do
               [ mkSkillLvl "records/skills/playerclass01/resistred1.dbr" 1
               , mkSkillLvl "records/skills/playerclass01/resistred1dup.dbr" 1
               ]
-          lines_ = resistReductionLines synthDb [] ch
-      length lines_ `shouldBe` 1
+          pairs = resistReductionLines synthDb [] ch
+      length pairs `shouldBe` 1

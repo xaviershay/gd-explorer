@@ -13,6 +13,7 @@ module GrimDawn.Web.View
   , CharacterDetailView (..)
   , GearView (..)
   , StatSummaryView (..)
+  , ResistReductionView (..)
   , ResistView (..)
   , NamedValueView (..)
   , KeyTotalView (..)
@@ -371,11 +372,22 @@ data StatSummaryView = StatSummaryView
   , ssvDamage :: ![Text] -- total damage bonuses (e.g. "+120% Acid")
   , ssvDamageTable :: ![DamageRowView] -- per-damage-type table
   , ssvCcResists :: ![ResistView] -- armor absorption + CC resists (with caps/overcap)
-  , ssvResistReduction :: ![Text] -- resistance reduction applied to enemies, one line per source
+  , ssvResistReduction :: ![ResistReductionView] -- resistance reduction applied to enemies
   }
   deriving (Show, Eq, Generic)
 
 instance ToJSON StatSummaryView where toJSON = genericToJSON opts
+
+-- | One resistance-reduction effect: the source that grants it (for hover
+-- lookups against the skill dictionary) and the rendered effect text (e.g.
+-- @"-30% Total (20% chance, 5s)"@ — see 'resistReductionLines').
+data ResistReductionView = ResistReductionView
+  { rrvSource :: !Text
+  , rrvEffect :: !Text
+  }
+  deriving (Show, Eq, Generic)
+
+instance ToJSON ResistReductionView where toJSON = genericToJSON opts
 
 -- | One row of the per-damage-type breakdown shown in the summary card.
 -- DoT flat values are per-second (sum of each source's total/duration).
@@ -487,7 +499,10 @@ detailView db owned overrides difficulty c =
     , cdvLevel = fromIntegral (charLevel c)
     , cdvClassName = className db c
     , cdvHardcore = charHardcore c
-    , cdvSummary = (toSummaryView difficulty (statSummary difficulty c (plainSources sources))) {ssvResistReduction = resistReductionLines db items c}
+    , cdvSummary =
+        (toSummaryView difficulty (statSummary difficulty c (plainSources sources)))
+          { ssvResistReduction = [ResistReductionView src eff | (src, eff) <- resistReductionLines db items c]
+          }
     , cdvAttacks = map toAttackView (attackDps db sources c)
     , cdvGear = map gearViewOf items
     , cdvArmorTable = armorTable items

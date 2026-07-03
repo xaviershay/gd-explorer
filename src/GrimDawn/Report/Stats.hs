@@ -1139,13 +1139,15 @@ resistReductionFragments i r =
         dur = atRankField i (base <> "DurationMin") r
   ]
   where
+    -- "Resistance" is dropped from the type label ("Total"/"Elemental"/
+    -- "Physical" only) since every caller already labels the whole section
+    -- as resistance reduction — repeating the word on every line is noise.
     fragment label isPct v chance dur =
       "-"
         <> showN (abs v)
         <> (if isPct then "%" else "")
         <> " "
         <> label
-        <> " Resistance"
         <> suffix chance dur
     suffix (Just c) (Just d) = " (" <> showInt c <> "% chance, " <> oneDp d <> "s)"
     suffix (Just c) Nothing = " (" <> showInt c <> "% chance)"
@@ -1153,28 +1155,30 @@ resistReductionFragments i r =
     suffix Nothing Nothing = ""
     showInt x = T.pack (show (round x :: Integer))
 
--- | Every resistance-reduction effect the character can apply to enemies,
--- one line per granting source (@"<source>: <effect>"@; a source with more
--- than one effect gets one line per effect). Scans equipped gear (base +
--- affixes + relic + augment + active set-tiers, via 'statSources') and
--- *every* invested skill node — devotion stars, mastery bars, and
--- playerclass skills (attacks, passives, and their modifiers/transmuters)
--- alike — since in practice the most common source of resistance reduction
--- is an attack skill's own modifier (e.g. Reprisal, Field Command), which
--- the narrower "buff" source pool 'skillSources' deliberately excludes.
--- Skill values are rank-aware (using each skill's effective invested rank,
--- the same @+skill levels@ scaling used elsewhere); gear/devotion records
--- are never rank-scaled, so they're always read at index 0.
-resistReductionLines :: GameDb -> [Item] -> Character -> [Text]
+-- | Every resistance-reduction effect the character can apply to enemies, as
+-- @(granting source, effect text)@ pairs — kept separate (rather than one
+-- pre-joined string) so a caller can hover/link the source name on its own,
+-- e.g. against the skill dictionary. A source with more than one effect
+-- gets one pair per effect. Scans equipped gear (base + affixes + relic +
+-- augment + active set-tiers, via 'statSources') and *every* invested skill
+-- node — devotion stars, mastery bars, and playerclass skills (attacks,
+-- passives, and their modifiers/transmuters) alike — since in practice the
+-- most common source of resistance reduction is an attack skill's own
+-- modifier (e.g. Reprisal, Field Command), which the narrower "buff" source
+-- pool 'skillSources' deliberately excludes. Skill values are rank-aware
+-- (using each skill's effective invested rank, the same @+skill levels@
+-- scaling used elsewhere); gear/devotion records are never rank-scaled, so
+-- they're always read at index 0.
+resistReductionLines :: GameDb -> [Item] -> Character -> [(Text, Text)]
 resistReductionLines db items c =
   -- A devotion celestial power's granted "_skill" proc record often mirrors
   -- the exact same field(s) as its constellation's own passive star record
   -- (both resolve to the same display name too), which would otherwise
-  -- render as an identical line twice. Deduping the final rendered lines is
-  -- safer than trying to exclude specific record shapes up front: it can
-  -- only ever merge two lines that already say the same thing, never drop a
+  -- render as an identical pair twice. Deduping the final pairs is safer
+  -- than trying to exclude specific record shapes up front: it can only
+  -- ever merge two entries that already say the same thing, never drop a
   -- genuinely distinct effect.
-  nub (concatMap lineFor gearEntries ++ concatMap lineFor skillEntries)
+  nub (concatMap pairsFor gearEntries ++ concatMap pairsFor skillEntries)
   where
     gear = statSources db items
     gearEntries = [(srcLabel s, 0, r) | (s, r) <- gear]
@@ -1185,7 +1189,7 @@ resistReductionLines db items c =
       , skLevel s > 0
       , Just r <- [lookupRecord (skName s) db]
       ]
-    lineFor (label, i, r) = [label <> ": " <> frag | frag <- resistReductionFragments i r]
+    pairsFor (label, i, r) = [(label, frag) | frag <- resistReductionFragments i r]
 
 -- | Estimate per-hit damage and DPS for each invested attack skill, given the
 -- character's effective stat @sources@ (gear + buffs). Pipeline per type: the

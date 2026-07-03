@@ -30,6 +30,8 @@ import { ItemAttributes } from "../components/ItemAttributes";
 import { EnhancementPicker } from "../components/EnhancementPicker";
 import { ItemPicker } from "../components/ItemPicker";
 import { encodeAttackKey } from "../attackKey";
+import { useSkillDict } from "../skills";
+import { SkillHover } from "../components/SkillHover";
 
 const num = (n: number) => Math.round(n).toLocaleString();
 
@@ -161,7 +163,6 @@ export function CharacterDetailView({ name }: { name: string }) {
                 armorTable={c.armorTable}
             />
             <AttacksPanel attacks={c.attacks} name={name} />
-            <ResistReductionPanel lines={c.summary.resistReduction} />
 
             <h2 className="section-head">
                 Equipped gear
@@ -796,6 +797,7 @@ function SummaryPanel({
     const procs = attacks.filter((a) => a.kind === "proc");
     const best = active.reduce((m, a) => Math.max(m, a.dps), 0);
     const procSum = procs.reduce((s, a) => s + a.dps, 0);
+    const skillDict = useSkillDict();
     return (
         <div className="summary-panel">
             <div className="summary-body">
@@ -876,6 +878,22 @@ function SummaryPanel({
                                 ))}
                             </tbody>
                         </table>
+                    </div>
+                )}
+                {summary.resistReduction.length > 0 && (
+                    <div className="summary-resist-reduction">
+                        <div className="summary-head">Resist Reduction</div>
+                        <ul className="resist-reduction-list">
+                            {summary.resistReduction.map((rr, i) => (
+                                <li key={i}>
+                                    <SkillHover
+                                        line={rr.source}
+                                        info={skillDict[rr.source]}
+                                    />
+                                    : {rr.effect}
+                                </li>
+                            ))}
+                        </ul>
                     </div>
                 )}
             </div>
@@ -1024,19 +1042,3 @@ function AttackCard({ a, name }: { a: Attack; name: string }) {
     );
 }
 
-// Resistance reduction the character can apply to enemies (from gear, devotions,
-// and every invested skill including attack-skill modifiers like Reprisal).
-// One line per granting source; mirrors the backend's rendered text exactly.
-function ResistReductionPanel({ lines }: { lines: string[] }) {
-    if (lines.length === 0) return null;
-    return (
-        <>
-            <h2 className="section-head">Resistance reduction (applied to enemies)</h2>
-            <ul className="resist-reduction-list">
-                {lines.map((l, i) => (
-                    <li key={i}>{l}</li>
-                ))}
-            </ul>
-        </>
-    );
-}
