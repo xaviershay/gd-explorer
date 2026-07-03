@@ -138,9 +138,11 @@ routes db texCache opts = do
         status status404
         text ("no character named " <> TL.fromStrict name)
 
-  -- Alternate owned items for a gear slot, scored by the `upgrades` path (the
+  -- Alternate items for a gear slot, scored by the `upgrades` path (the
   -- candidate inherits the slot's component/augment). Best-first, only items that
-  -- improve on the current one; each carries its location (character/stash).
+  -- improve on the current one; each carries its location (character/stash, or
+  -- "craftable (blueprint)" for an unowned item with a learned blueprint). Owned
+  -- items are listed first so a duplicate display name prefers the owned copy.
   get "/api/characters/:name/items" $ do
     name <- pathParam "name"
     slot <- queryParam "slot"
@@ -148,8 +150,11 @@ routes db texCache opts = do
     diff <- difficultyParam
     chars <- loadOr (loadCharacters (soDataDir opts))
     owned <- loadOr (loadOwnedItems (soDataDir opts))
+    -- Learned blueprints are optional; a missing/unreadable formulas.gst just
+    -- means "nothing craftable", so never fail the picker over it.
+    craftable <- liftIO (either (const []) (craftableItems db) <$> loadKnownFormulas (soDataDir opts))
     case findChar name chars of
-      Just c -> json (rankItems db owned overrides diff slot c)
+      Just c -> json (rankItems db (owned ++ craftable) overrides diff slot c)
       Nothing -> do
         status status404
         text ("no character named " <> TL.fromStrict name)
