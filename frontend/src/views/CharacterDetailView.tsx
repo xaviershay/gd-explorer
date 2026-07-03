@@ -883,17 +883,21 @@ function SummaryPanel({
                 {summary.resistReduction.length > 0 && (
                     <div className="summary-resist-reduction">
                         <div className="summary-head">Resist Reduction</div>
-                        <ul className="resist-reduction-list">
-                            {summary.resistReduction.map((rr, i) => (
-                                <li key={i}>
-                                    <SkillHover
-                                        line={rr.source}
-                                        info={skillDict[rr.source]}
-                                    />
-                                    : {rr.effect}
-                                </li>
-                            ))}
-                        </ul>
+                        <table className="element-table">
+                            <tbody>
+                                {summary.resistReduction.map((rr, i) => (
+                                    <tr key={i}>
+                                        <td className="el-label">
+                                            <SkillHover
+                                                line={rr.source}
+                                                info={skillDict[rr.source]}
+                                            />
+                                        </td>
+                                        <td>{rr.effect}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
                     </div>
                 )}
             </div>
