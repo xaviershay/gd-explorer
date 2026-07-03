@@ -161,6 +161,7 @@ export function CharacterDetailView({ name }: { name: string }) {
                 armorTable={c.armorTable}
             />
             <AttacksPanel attacks={c.attacks} name={name} />
+            <ResistReductionPanel lines={c.summary.resistReduction} />
 
             <h2 className="section-head">
                 Equipped gear
@@ -1020,5 +1021,22 @@ function AttackCard({ a, name }: { a: Attack; name: string }) {
                 ))}
             </div>
         </a>
+    );
+}
+
+// Resistance reduction the character can apply to enemies (from gear, devotions,
+// and every invested skill including attack-skill modifiers like Reprisal).
+// One line per granting source; mirrors the backend's rendered text exactly.
+function ResistReductionPanel({ lines }: { lines: string[] }) {
+    if (lines.length === 0) return null;
+    return (
+        <>
+            <h2 className="section-head">Resistance reduction (applied to enemies)</h2>
+            <ul className="resist-reduction-list">
+                {lines.map((l, i) => (
+                    <li key={i}>{l}</li>
+                ))}
+            </ul>
+        </>
     );
 }

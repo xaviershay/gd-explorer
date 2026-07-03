@@ -128,6 +128,7 @@ export interface StatSummary {
     damage: string[];
     damageTable: DamageRow[];
     ccResists: ResistStat[];
+    resistReduction: string[]; // resistance reduction applied to enemies, one line per source
 }
 
 export interface ShoppingItem {
