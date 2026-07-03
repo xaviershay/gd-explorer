@@ -738,7 +738,7 @@ a.attack-card:hover {
     font-size: 13px;
     font-variant-numeric: tabular-nums;
     width: 100%;
-    max-width: 640px;
+    max-width: 760px;
     margin-bottom: 10px;
 }
 .contrib-table th {
@@ -761,6 +761,20 @@ a.attack-card:hover {
 .contrib-table tfoot td {
     border-top: 1px solid var(--border);
     font-weight: 700;
+}
+.contrib-table .bar-col {
+    width: 120px;
+}
+.magnitude-bar-track {
+    height: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.magnitude-bar-fill {
+    height: 100%;
+    background: #ffce3a;
+    border-radius: 4px;
 }
 .breakdown-columns {
     display: flex;

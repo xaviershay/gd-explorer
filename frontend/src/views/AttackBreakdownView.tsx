@@ -138,8 +138,22 @@ export function AttackBreakdownView({
     );
 }
 
+// A horizontal bar showing |value| relative to |max| (the largest magnitude
+// in the same table), so bars are only ever compared within one table.
+function MagnitudeBar({ value, max }: { value: number; max: number }) {
+    const pct = max > 0 ? Math.min(100, (Math.abs(value) / max) * 100) : 0;
+    return (
+        <div className="magnitude-bar-track">
+            <div className="magnitude-bar-fill" style={{ width: `${pct}%` }} />
+        </div>
+    );
+}
+
 function ImpactSection({ sources }: { sources: SourceImpact[] }) {
     if (sources.length === 0) return null;
+    // already sorted by |impact| descending (see attackDpsBreakdown), so the
+    // first row is the max magnitude for the bar scale.
+    const max = Math.abs(sources[0].dpsImpact);
     return (
         <>
             <h2 className="section-head">Sources ranked by DPS impact</h2>
@@ -156,6 +170,7 @@ function ImpactSection({ sources }: { sources: SourceImpact[] }) {
                         <th>Source</th>
                         <th>Category</th>
                         <th className="num-col">DPS impact</th>
+                        <th className="bar-col"></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -168,6 +183,9 @@ function ImpactSection({ sources }: { sources: SourceImpact[] }) {
                             <td className="num-col">
                                 {s.dpsImpact >= 0 ? "+" : ""}
                                 {num(s.dpsImpact)}
+                            </td>
+                            <td className="bar-col">
+                                <MagnitudeBar value={s.dpsImpact} max={max} />
                             </td>
                         </tr>
                     ))}
@@ -187,6 +205,10 @@ function ContribTable({
     total: number;
 }) {
     if (rows.length === 0) return null;
+    const sorted = [...rows].sort(
+        (a, b) => Math.abs(b.value) - Math.abs(a.value),
+    );
+    const max = Math.abs(sorted[0].value);
     return (
         <table className="contrib-table">
             <thead>
@@ -194,25 +216,28 @@ function ContribTable({
                     <th>Source</th>
                     <th>Category</th>
                     <th className="num-col">{valueLabel}</th>
+                    <th className="bar-col"></th>
                 </tr>
             </thead>
             <tbody>
-                {[...rows]
-                    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
-                    .map((r, i) => (
-                        <tr key={i}>
-                            <td>{r.label}</td>
-                            <td>
-                                <CategoryBadge category={r.category} />
-                            </td>
-                            <td className="num-col">{num(r.value)}</td>
-                        </tr>
-                    ))}
+                {sorted.map((r, i) => (
+                    <tr key={i}>
+                        <td>{r.label}</td>
+                        <td>
+                            <CategoryBadge category={r.category} />
+                        </td>
+                        <td className="num-col">{num(r.value)}</td>
+                        <td className="bar-col">
+                            <MagnitudeBar value={r.value} max={max} />
+                        </td>
+                    </tr>
+                ))}
             </tbody>
             <tfoot>
                 <tr>
                     <td colSpan={2}>Total</td>
                     <td className="num-col">{num(total)}</td>
+                    <td className="bar-col" />
                 </tr>
             </tfoot>
         </table>
