@@ -79,6 +79,7 @@ library oa-da-fit-lib
       OaDaFit.Csv
       OaDaFit.Inputs
       OaDaFit.LeastSquares
+      OaDaFit.Model
   other-modules:
       Paths_gd_explorer
   autogen-modules:
@@ -211,6 +212,7 @@ test-suite gd-explorer-test
       OaDaFit.CsvSpec
       OaDaFit.InputsSpec
       OaDaFit.LeastSquaresSpec
+      OaDaFit.ModelSpec
       TestHelpers
       Paths_gd_explorer
   autogen-modules:
