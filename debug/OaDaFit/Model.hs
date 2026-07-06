@@ -9,7 +9,6 @@ module OaDaFit.Model
   , candidates
   ) where
 
-import Data.Text (Text)
 import OaDaFit.Inputs (Inputs (..))
 import OaDaFit.LeastSquares (leastSquares)
 
