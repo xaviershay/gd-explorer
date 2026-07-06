@@ -80,6 +80,7 @@ library oa-da-fit-lib
       OaDaFit.Inputs
       OaDaFit.LeastSquares
       OaDaFit.Model
+      OaDaFit.Resolve
   other-modules:
       Paths_gd_explorer
   autogen-modules:
@@ -213,6 +214,7 @@ test-suite gd-explorer-test
       OaDaFit.InputsSpec
       OaDaFit.LeastSquaresSpec
       OaDaFit.ModelSpec
+      OaDaFit.ResolveSpec
       TestHelpers
       Paths_gd_explorer
   autogen-modules:

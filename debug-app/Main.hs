@@ -1,7 +1,6 @@
 module Main (main) where
 
-import Data.List (sortOn, minimumBy)
-import Data.Ord (comparing)
+import Data.List (sortOn)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import System.Exit (exitFailure)
@@ -12,6 +11,7 @@ import GrimDawn.Gdc (Character, charName)
 import OaDaFit.Csv (Obs (..), parseDataCsv)
 import OaDaFit.Inputs (Inputs (..), characterHealth, characterInputs, loadInputs)
 import OaDaFit.Model
+import OaDaFit.Resolve (resolveMatch)
 
 main :: IO ()
 main = do
@@ -43,17 +43,8 @@ main = do
 -- by picking the one whose computed Health (in the same gear state as the
 -- row) is closest to the observed Health.
 resolveObs :: GameDb -> [Character] -> Obs -> (Obs, Maybe Character)
-resolveObs db chars o = (o, pick matches)
-  where
-    lname = T.toLower (obsName o)
-    matches = [c | c <- chars, T.toLower (charName c) == lname]
-    pick [] = Nothing
-    pick [c] = Just c
-    pick cs =
-      Just $
-        minimumBy
-          (comparing (\c -> abs (characterHealth db c (obsGear o) - obsHealth o)))
-          cs
+resolveObs db chars o =
+  (o, resolveMatch charName (\c -> characterHealth db c (obsGear o)) (obsName o) (obsHealth o) chars)
 
 report :: Ability -> [Point] -> IO ()
 report ab pts = do
