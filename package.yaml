@@ -71,11 +71,10 @@ internal-libraries:
 
     oa-da-fit-lib:
         source-dirs: debug
-        exposed-modules:
-            - OaDaFit.Csv
         dependencies:
             - gd-explorer
             - text
+            - containers
 
 executables:
     gd-explorer:
@@ -93,15 +92,16 @@ executables:
 
     oa-da-fit:
         main: Main.hs
-        source-dirs: debug
+        source-dirs: debug-app
         ghc-options:
             - -threaded
             - -rtsopts
             - -with-rtsopts=-N
         dependencies:
+            - base
             - gd-explorer
+            - gd-explorer:oa-da-fit-lib
             - text
-            - containers
 
 tests:
     gd-explorer-test:

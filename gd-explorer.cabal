@@ -78,7 +78,6 @@ library oa-da-fit-lib
   exposed-modules:
       OaDaFit.Csv
   other-modules:
-      Main
       Paths_gd_explorer
   autogen-modules:
       Paths_gd_explorer
@@ -95,6 +94,7 @@ library oa-da-fit-lib
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   build-depends:
       base >=4.7 && <5
+    , containers
     , gd-explorer
     , text
   default-language: Haskell2010
@@ -164,12 +164,11 @@ executable gd-explorer
 executable oa-da-fit
   main-is: Main.hs
   other-modules:
-      OaDaFit.Csv
       Paths_gd_explorer
   autogen-modules:
       Paths_gd_explorer
   hs-source-dirs:
-      debug
+      debug-app
   default-extensions:
       OverloadedStrings
       LambdaCase
@@ -180,9 +179,9 @@ executable oa-da-fit
       MultiWayIf
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      base >=4.7 && <5
-    , containers
+      base
     , gd-explorer
+    , gd-explorer:oa-da-fit-lib
     , text
   default-language: Haskell2010
 
