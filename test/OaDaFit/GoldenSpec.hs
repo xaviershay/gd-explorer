@@ -1,6 +1,7 @@
 module OaDaFit.GoldenSpec (spec) where
 
 import Control.Monad (unless)
+import System.Directory (doesFileExist)
 import Test.Hspec
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -21,10 +22,14 @@ tol = 140
 spec :: Spec
 spec = describe "shipped OA/DA formula vs ground truth (data.csv)" $
   it "matches every resolved character/gear-state row within tol" $ do
-    raw <- TIO.readFile "data.csv"
-    (db, chars) <- loadInputs "data/gd-data"
-    let rows = parseDataCsv raw
-    mapM_ (checkRow db chars) rows
+    present <- doesFileExist "data.csv"
+    if not present
+      then pendingWith "data.csv not present — skipping OA/DA golden regression"
+      else do
+        raw <- TIO.readFile "data.csv"
+        (db, chars) <- loadInputs "data/gd-data"
+        let rows = parseDataCsv raw
+        mapM_ (checkRow db chars) rows
 
 checkRow :: GameDb -> [Character] -> Obs -> IO ()
 checkRow db chars o =

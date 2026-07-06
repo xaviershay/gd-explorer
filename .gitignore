@@ -7,3 +7,6 @@ frontend/dist/
 .superpowers/
 *.hi
 *.o
+
+# local ground-truth data
+data.csv
