@@ -74,6 +74,31 @@ library
     , vector
   default-language: Haskell2010
 
+library oa-da-fit-lib
+  exposed-modules:
+      OaDaFit.Csv
+  other-modules:
+      Main
+      Paths_gd_explorer
+  autogen-modules:
+      Paths_gd_explorer
+  hs-source-dirs:
+      debug
+  default-extensions:
+      OverloadedStrings
+      LambdaCase
+      ScopedTypeVariables
+      TupleSections
+      BangPatterns
+      RecordWildCards
+      MultiWayIf
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
+  build-depends:
+      base >=4.7 && <5
+    , gd-explorer
+    , text
+  default-language: Haskell2010
+
 library web
   exposed-modules:
       GrimDawn.Web.Server
@@ -136,6 +161,31 @@ executable gd-explorer
     , text
   default-language: Haskell2010
 
+executable oa-da-fit
+  main-is: Main.hs
+  other-modules:
+      OaDaFit.Csv
+      Paths_gd_explorer
+  autogen-modules:
+      Paths_gd_explorer
+  hs-source-dirs:
+      debug
+  default-extensions:
+      OverloadedStrings
+      LambdaCase
+      ScopedTypeVariables
+      TupleSections
+      BangPatterns
+      RecordWildCards
+      MultiWayIf
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , containers
+    , gd-explorer
+    , text
+  default-language: Haskell2010
+
 test-suite gd-explorer-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
@@ -157,6 +207,7 @@ test-suite gd-explorer-test
       GrimDawn.StashSpec
       GrimDawn.Web.TextureSpec
       GrimDawn.Web.ViewSpec
+      OaDaFit.CsvSpec
       TestHelpers
       Paths_gd_explorer
   autogen-modules:
@@ -181,6 +232,7 @@ test-suite gd-explorer-test
     , directory
     , filepath
     , gd-explorer
+    , gd-explorer:oa-da-fit-lib
     , gd-explorer:web
     , hspec
     , optparse-applicative

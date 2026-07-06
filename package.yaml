@@ -69,6 +69,14 @@ internal-libraries:
             - wai-app-static
             - warp
 
+    oa-da-fit-lib:
+        source-dirs: debug
+        exposed-modules:
+            - OaDaFit.Csv
+        dependencies:
+            - gd-explorer
+            - text
+
 executables:
     gd-explorer:
         main: Main.hs
@@ -83,6 +91,18 @@ executables:
             - optparse-applicative
             - text
 
+    oa-da-fit:
+        main: Main.hs
+        source-dirs: debug
+        ghc-options:
+            - -threaded
+            - -rtsopts
+            - -with-rtsopts=-N
+        dependencies:
+            - gd-explorer
+            - text
+            - containers
+
 tests:
     gd-explorer-test:
         main: Spec.hs
@@ -94,6 +114,7 @@ tests:
         dependencies:
             - gd-explorer
             - gd-explorer:web
+            - gd-explorer:oa-da-fit-lib
             - aeson
             - hspec
             - bytestring
