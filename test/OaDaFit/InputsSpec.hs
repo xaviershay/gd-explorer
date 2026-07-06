@@ -3,7 +3,7 @@ module OaDaFit.InputsSpec (spec) where
 import Test.Hspec
 import qualified Data.Text as T
 import Data.List (find)
-import OaDaFit.Inputs (Inputs (..), characterInputs, loadInputs)
+import OaDaFit.Inputs (Inputs (..), characterHealth, characterInputs, loadInputs)
 import GrimDawn.Gdc (Character (..))
 
 spec :: Spec
@@ -27,4 +27,13 @@ spec = describe "characterInputs" $ do
       Just c ->
         inCun (characterInputs db c False) <= inCun (characterInputs db c True)
           `shouldBe` True
+      Nothing -> expectationFailure "no Shield"
+  it "characterHealth is positive and no less geared than ungeared" $ do
+    (db, chars) <- loadInputs "data/gd-data"
+    case find ((== T.pack "Shield") . charName) chars of
+      Just c -> do
+        let ungeared = characterHealth db c False
+            geared = characterHealth db c True
+        ungeared `shouldSatisfy` (> 0)
+        geared `shouldSatisfy` (>= ungeared)
       Nothing -> expectationFailure "no Shield"

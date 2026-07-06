@@ -1,6 +1,7 @@
 module OaDaFit.Inputs
   ( Inputs (..)
   , characterInputs
+  , characterHealth
   , loadInputs
   ) where
 
@@ -9,6 +10,7 @@ import qualified Data.Text as T
 import Data.List (find)
 import GrimDawn.Db (GameDb, loadGameDb)
 import GrimDawn.Aggregate (loadCharacters)
+import GrimDawn.Arz (Record)
 import GrimDawn.Gdc (Character (..), Skill (..))
 import GrimDawn.Item (sumField)
 import GrimDawn.Report.Stats
@@ -58,6 +60,18 @@ characterInputs db c geared =
     , inMasteryRanks = masteryRankTotal c
     }
   where
+    src = characterSources db c geared
+    summary = statSummary Normal c src
+    attr label = maybe 0 snd (find ((== label) . fst) (ssAttributes summary))
+
+-- | Build the permanent-buff-state stat sources for a character, either
+-- geared (all equipped items) or ungeared (gear stripped). Ungeared
+-- recomputes skill buff ranks without gear's +skill bonuses, matching how the
+-- game behaves when gear is removed. Shared by 'characterInputs' and
+-- 'characterHealth' so both agree on the exact same inputs.
+characterSources :: GameDb -> Character -> Bool -> [(Text, Record)]
+characterSources db c geared = src
+  where
     perm = either error id (parseBuffs "permanent")
     gearSrc = if geared then statSources db (charEquipped c) else []
     dev = devotionSources db c
@@ -65,8 +79,12 @@ characterInputs db c geared =
     nonSkill = gearSrc ++ dev ++ mas
     sk = skillSources perm nonSkill db c
     src = plainSources (nonSkill ++ sk)
-    summary = statSummary Normal c src
-    attr label = maybe 0 snd (find ((== label) . fst) (ssAttributes summary))
+
+-- | Total computed max Health for a character in a given gear state, used to
+-- disambiguate between saves that share a character name.
+characterHealth :: GameDb -> Character -> Bool -> Double
+characterHealth db c geared =
+  ssHealthTotal (statSummary Normal c (characterSources db c geared))
 
 -- | Total invested ranks across a character's mastery bars (the
 -- @_classtraining_@ skill records).

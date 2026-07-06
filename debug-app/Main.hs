@@ -1,12 +1,16 @@
 module Main (main) where
 
-import Data.List (find, sortOn)
+import Data.List (sortOn, minimumBy)
+import Data.Ord (comparing)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import System.Exit (exitFailure)
+import System.IO (hPutStrLn, stderr)
 import Text.Printf (printf)
-import GrimDawn.Gdc (charName)
+import GrimDawn.Db (GameDb)
+import GrimDawn.Gdc (Character, charName)
 import OaDaFit.Csv (Obs (..), parseDataCsv)
-import OaDaFit.Inputs (Inputs (..), characterInputs, loadInputs)
+import OaDaFit.Inputs (Inputs (..), characterHealth, characterInputs, loadInputs)
 import OaDaFit.Model
 
 main :: IO ()
@@ -14,17 +18,42 @@ main = do
   raw <- TIO.readFile "data.csv"
   let obs = parseDataCsv raw
   (db, chars) <- loadInputs "data/gd-data"
-  let points ab =
-        [ Point inp (if ab == OA then obsOA o else obsDA o)
-        | o <- obs
-        , Just c <- [find ((== obsName o) . charName) chars]
-        , let inp = characterInputs db c (obsGear o)
-        ]
-  putStrLn "=== Offensive Ability ==="
-  report OA (points OA)
-  putStrLn ""
-  putStrLn "=== Defensive Ability ==="
-  report DA (points DA)
+  let resolved = map (resolveObs db chars) obs
+      unmatched = [o | (o, Nothing) <- resolved]
+  if not (null unmatched)
+    then do
+      hPutStrLn stderr "ERROR: the following data.csv rows matched no loaded character:"
+      mapM_ (hPutStrLn stderr . ("  " ++) . T.unpack . obsName) unmatched
+      exitFailure
+    else do
+      let pairs = [(o, c) | (o, Just c) <- resolved]
+          points ab =
+            [ Point inp (if ab == OA then obsOA o else obsDA o)
+            | (o, c) <- pairs
+            , let inp = characterInputs db c (obsGear o)
+            ]
+      putStrLn "=== Offensive Ability ==="
+      report OA (points OA)
+      putStrLn ""
+      putStrLn "=== Defensive Ability ==="
+      report DA (points DA)
+
+-- | Resolve one data.csv row to the character it was observed on. Matching is
+-- case-insensitive on name. Duplicate saves sharing a name are disambiguated
+-- by picking the one whose computed Health (in the same gear state as the
+-- row) is closest to the observed Health.
+resolveObs :: GameDb -> [Character] -> Obs -> (Obs, Maybe Character)
+resolveObs db chars o = (o, pick matches)
+  where
+    lname = T.toLower (obsName o)
+    matches = [c | c <- chars, T.toLower (charName c) == lname]
+    pick [] = Nothing
+    pick [c] = Just c
+    pick cs =
+      Just $
+        minimumBy
+          (comparing (\c -> abs (characterHealth db c (obsGear o) - obsHealth o)))
+          cs
 
 report :: Ability -> [Point] -> IO ()
 report ab pts = do
