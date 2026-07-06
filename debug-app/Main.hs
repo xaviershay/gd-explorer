@@ -75,8 +75,9 @@ report ab pts = do
     [] -> putStrLn "  (no candidate fit)"
   where
     line (nm, fr) =
-      printf "  %-32s  RMS %8.2f  maxAbs %8.2f  LOO-RMS %8.2f\n"
+      printf "  %-32s  RMS %8.2f  maxAbs %8.2f  LOO-RMS %8.2f   [base %.2f, lvl %.4f, attr %.4f, mast %.4f]\n"
         nm (frRms fr) (frMaxAbs fr) (frLooRms fr)
+        (frBase fr) (frLevel fr) (frAttr fr) (frMastery fr)
     perPoint a fr p =
       let i = pInputs p
           pr = predict a fr i
