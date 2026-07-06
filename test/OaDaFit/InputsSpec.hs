@@ -16,9 +16,8 @@ spec = describe "characterInputs" $ do
         let g = characterInputs db c True
         inLevel g `shouldBe` 100
         -- Current values verified against `gd-explorer character Shield
-        -- --buffs permanent`: Cunning 606, Physique 1432. (The brief's
-        -- original 577/1284 match this build's *ungeared* totals instead —
-        -- see task-3-report.md for the discrepancy note.)
+        -- --buffs permanent`: Cunning 606, Physique 1432. (Smoke test against
+        -- the real save in data/gd-data; will differ for other users' saves.)
         round (inCun g) `shouldBe` (606 :: Int)
         round (inPhys g) `shouldBe` (1432 :: Int)
   it "ungeared Cunning is no greater than geared Cunning" $ do

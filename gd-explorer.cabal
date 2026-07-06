@@ -98,7 +98,6 @@ library oa-da-fit-lib
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   build-depends:
       base >=4.7 && <5
-    , containers
     , gd-explorer
     , text
   default-language: Haskell2010
