@@ -211,6 +211,7 @@ test-suite gd-explorer-test
       GrimDawn.Web.TextureSpec
       GrimDawn.Web.ViewSpec
       OaDaFit.CsvSpec
+      OaDaFit.GoldenSpec
       OaDaFit.InputsSpec
       OaDaFit.LeastSquaresSpec
       OaDaFit.ModelSpec

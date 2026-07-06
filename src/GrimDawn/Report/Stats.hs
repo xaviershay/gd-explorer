@@ -691,13 +691,15 @@ statSummary diff c sources =
       (charEnergy c + bonusEnergy + sumField sources "characterMana")
         * (1 + sumField sources "characterManaModifier" / 100)
     lvl = fromIntegral (charLevel c) :: Double
-    -- OA = (115 + 12*Level + 0.4*Cunning + flat bonuses) * (1 + %OA/100)
-    -- DA = (115 + 12*Level + 0.4*Spirit  + flat bonuses) * (1 + %DA/100)
+    -- OA/DA fitted to observed in-game values (see
+    -- docs/superpowers/plans/2026-07-06-oa-da-formula.md): per-level growth
+    -- ~12.5 (not the wiki's 10), +0.4 per Cunning/Physique, no mastery term.
+    -- DA derives from Physique (the previous Spirit was a bug).
     oaTotal =
-      (115 + 12 * lvl + 0.4 * totalAttr "Cunning" + sumField sources "characterOffensiveAbility")
+      (106.14 + 12.6885 * lvl + 0.4 * totalAttr "Cunning" + sumField sources "characterOffensiveAbility")
         * (1 + sumField sources "characterOffensiveAbilityModifier" / 100)
     daTotal =
-      (115 + 12 * lvl + 0.4 * totalAttr "Spirit" + sumField sources "characterDefensiveAbility")
+      (146.02 + 12.3545 * lvl + 0.4 * totalAttr "Physique" + sumField sources "characterDefensiveAbility")
         * (1 + sumField sources "characterDefensiveAbilityModifier" / 100)
 
 --------------------------------------------------------------------------------

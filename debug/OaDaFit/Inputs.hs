@@ -2,6 +2,7 @@ module OaDaFit.Inputs
   ( Inputs (..)
   , characterInputs
   , characterHealth
+  , characterSources
   , loadInputs
   ) where
 
