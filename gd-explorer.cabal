@@ -77,6 +77,7 @@ library
 library oa-da-fit-lib
   exposed-modules:
       OaDaFit.Csv
+      OaDaFit.Inputs
       OaDaFit.LeastSquares
   other-modules:
       Paths_gd_explorer
@@ -208,6 +209,7 @@ test-suite gd-explorer-test
       GrimDawn.Web.TextureSpec
       GrimDawn.Web.ViewSpec
       OaDaFit.CsvSpec
+      OaDaFit.InputsSpec
       OaDaFit.LeastSquaresSpec
       TestHelpers
       Paths_gd_explorer

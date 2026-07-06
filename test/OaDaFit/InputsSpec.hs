@@ -1,0 +1,30 @@
+module OaDaFit.InputsSpec (spec) where
+
+import Test.Hspec
+import qualified Data.Text as T
+import Data.List (find)
+import OaDaFit.Inputs (Inputs (..), characterInputs, loadInputs)
+import GrimDawn.Gdc (Character (..))
+
+spec :: Spec
+spec = describe "characterInputs" $ do
+  it "extracts Shield's geared level and attributes matching the app" $ do
+    (db, chars) <- loadInputs "data/gd-data"
+    case find ((== T.pack "Shield") . charName) chars of
+      Nothing -> expectationFailure "no character named Shield"
+      Just c -> do
+        let g = characterInputs db c True
+        inLevel g `shouldBe` 100
+        -- Current values verified against `gd-explorer character Shield
+        -- --buffs permanent`: Cunning 606, Physique 1432. (The brief's
+        -- original 577/1284 match this build's *ungeared* totals instead —
+        -- see task-3-report.md for the discrepancy note.)
+        round (inCun g) `shouldBe` (606 :: Int)
+        round (inPhys g) `shouldBe` (1432 :: Int)
+  it "ungeared Cunning is no greater than geared Cunning" $ do
+    (db, chars) <- loadInputs "data/gd-data"
+    case find ((== T.pack "Shield") . charName) chars of
+      Just c ->
+        inCun (characterInputs db c False) <= inCun (characterInputs db c True)
+          `shouldBe` True
+      Nothing -> expectationFailure "no Shield"
